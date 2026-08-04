@@ -341,6 +341,17 @@ public sealed class ClipboardTransport : IDisposable
 
     // ===================== FETCH (file on-demand) =====================
 
+    /// <summary>Codice d'errore di protocollo: l'offerta non esiste più sull'host.</summary>
+    private const string WireErrorOfferGone = "offer-gone";
+
+    /// <summary>
+    /// Converte il codice d'errore ricevuto dall'altro PC in un testo nella lingua
+    /// di CHI LEGGE. I peer più vecchi mandano già la frase in chiaro: in quel caso
+    /// la si mostra così com'è.
+    /// </summary>
+    private static string TranslateWireError(string wire) =>
+        wire == WireErrorOfferGone ? L.T("error.offerGone") : wire;
+
     public async Task<List<string>> FetchAsync(Peer owner, Guid offerId, string destDir, CancellationToken ct,
         IProgress<FetchProgress>? progress = null)
     {
@@ -354,7 +365,7 @@ public sealed class ClipboardTransport : IDisposable
 
         var s = await ClientHandshakeAsync(stream, ct);
         if (s == null || !_trust.Matches(s.R.PeerDeviceId, s.R.PeerPublicKeyDer))
-            throw new IOException("Dispositivo non fidato o handshake fallito.");
+            throw new IOException(L.T("error.notTrusted"));
 
         await WriteSessionAsync(stream, s.Cipher, Concat(new[] { OpFetch }, offerId.ToByteArray()), ct);
 
@@ -372,7 +383,7 @@ public sealed class ClipboardTransport : IDisposable
                 if (plain == null || plain.Length == 0) break;
                 var t = plain[0];
                 if (t == FEnd) break;
-                if (t == FError) throw new IOException(Encoding.UTF8.GetString(plain, 5, ReadInt(plain, 1)));
+                if (t == FError) throw new IOException(TranslateWireError(Encoding.UTF8.GetString(plain, 5, ReadInt(plain, 1))));
                 if (t == FHeader)
                 {
                     current?.Dispose(); current = null;
@@ -421,7 +432,9 @@ public sealed class ClipboardTransport : IDisposable
         var offer = _offerStore.Get(offerId);
         if (offer == null || offer.RootParents == null)
         {
-            await WriteSessionAsync(stream, s.Cipher, ErrorFrame("Offerta non più disponibile."), ct);
+            // sul filo va un CODICE, non una frase: il testo lo traduce chi riceve,
+            // nella sua lingua (vedi TranslateWireError)
+            await WriteSessionAsync(stream, s.Cipher, ErrorFrame(WireErrorOfferGone), ct);
             return;
         }
         foreach (var e in offer.Entries)

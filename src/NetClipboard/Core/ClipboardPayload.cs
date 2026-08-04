@@ -129,11 +129,11 @@ public sealed class ClipboardPayload
                 var t = (Text ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
                 return t.Length > 80 ? t[..80] + "…" : t;
             case PayloadKind.Image:
-                return $"[Immagine · {(ImagePng?.Length ?? 0) / 1024} KB]";
+                return L.T("preview.image", (ImagePng?.Length ?? 0) / 1024);
             case PayloadKind.Files:
-                return Offer != null ? FileSummary(Offer) : "[File]";
+                return Offer != null ? FileSummary(Offer) : L.T("preview.files");
             default:
-                return "[?]";
+                return L.T("preview.unknown");
         }
     }
 
@@ -142,17 +142,17 @@ public sealed class ClipboardPayload
         var names = string.Join(", ", offer.TopLevelNames.Take(3));
         var more = offer.TopLevelNames.Count() > 3 ? "…" : "";
         var what = offer.DirCount > 0
-            ? $"{offer.FileCount} file, {offer.DirCount} cartelle"
-            : $"{offer.FileCount} file";
-        return $"[{what} · {HumanSize(offer.TotalSize)}] {names}{more}";
+            ? L.T("preview.filesAndDirs", offer.FileCount, offer.DirCount)
+            : L.T("preview.filesOnly", offer.FileCount);
+        return L.T("preview.fileSummary", what, HumanSize(offer.TotalSize), names, more);
     }
 
     public static string HumanSize(long bytes)
     {
-        string[] u = { "B", "KB", "MB", "GB", "TB" };
+        string[] units = { "unit.b", "unit.kb", "unit.mb", "unit.gb", "unit.tb" };
         double v = bytes;
         var i = 0;
-        while (v >= 1024 && i < u.Length - 1) { v /= 1024; i++; }
-        return $"{v:0.#} {u[i]}";
+        while (v >= 1024 && i < units.Length - 1) { v /= 1024; i++; }
+        return L.T("unit.format", v, L.T(units[i]));
     }
 }

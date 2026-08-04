@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using NetClipboard.Core;
 using NetClipboard.Net;
 
 namespace NetClipboard.Ui;
@@ -27,38 +28,33 @@ public sealed class SettingsForm : ScaledForm
     private readonly NumericUpDown _historySize = new() { Minimum = 5, Maximum = 200 };
     private readonly NumericUpDown _maxAgeDays = new() { Minimum = 0, Maximum = 3650 };
     private readonly NumericUpDown _maxMb = new() { Minimum = 1, Maximum = 2048 };
-    private readonly CheckBox _shareText = new() { Text = "Testo", AutoSize = true };
-    private readonly CheckBox _shareImages = new() { Text = "Immagini", AutoSize = true };
-    private readonly CheckBox _shareFiles = new() { Text = "File", AutoSize = true };
-    private readonly CheckBox _autostart = new() { Text = "Avvia con Windows", AutoSize = true };
-    private readonly CheckBox _autoScan = new() { Text = "Scoperta automatica (scansione rete)", AutoSize = true };
-    private readonly CheckBox _autoUpdate = new() { Text = "Controlla aggiornamenti", AutoSize = true };
-    private readonly TextBox _updateUrl = new() { PlaceholderText = "predefinito (già incluso) · lascia vuoto" };
+    private readonly CheckBox _shareText = new() { AutoSize = true };
+    private readonly CheckBox _shareImages = new() { AutoSize = true };
+    private readonly CheckBox _shareFiles = new() { AutoSize = true };
+    private readonly CheckBox _autostart = new() { AutoSize = true };
+    private readonly CheckBox _autoScan = new() { AutoSize = true };
+    private readonly CheckBox _autoUpdate = new() { AutoSize = true };
+    private readonly TextBox _updateUrl = new();
     private readonly TextBox _manualPeers = new() { Multiline = true, ScrollBars = ScrollBars.Vertical };
     private readonly Label _firewall = new() { AutoSize = true };
-    private readonly Button _firewallBtn = new() { Text = "Configura firewall" };
-    private readonly Button _ok = new() { Text = "Salva" };
-    private readonly Button _cancel = new() { Text = "Annulla" };
+    private readonly Button _firewallBtn = new();
+    private readonly Button _ok = new();
+    private readonly Button _cancel = new();
 
-    private readonly Label _lblName = new() { Text = "Nome di questo PC" };
-    private readonly Label _lblPort = new() { Text = "Porta (TCP/UDP)" };
-    private readonly Label _lblHistory = new() { Text = "Elementi in cronologia" };
-    private readonly Label _lblAge = new() { Text = "Conservazione (giorni, 0=∞)" };
-    private readonly Label _lblSize = new() { Text = "Dimensione max (MB)" };
-    private readonly Label _lblShare = new() { Text = "Condividi" };
-    private readonly Label _lblUpdateUrl = new() { Text = "URL update (opz.)" };
-    private readonly Label _lblPeers = new() { Text = "IP peer manuali" };
-    private readonly Label _lblPeersHint = new()
-    {
-        Text = "(uno per riga; basta che un lato inserisca l'IP dell'altro)",
-        ForeColor = Color.Gray,
-    };
+    private readonly Label _lblName = new();
+    private readonly Label _lblPort = new();
+    private readonly Label _lblHistory = new();
+    private readonly Label _lblAge = new();
+    private readonly Label _lblSize = new();
+    private readonly Label _lblShare = new();
+    private readonly Label _lblUpdateUrl = new();
+    private readonly Label _lblPeers = new();
+    private readonly Label _lblPeersHint = new() { ForeColor = Color.Gray };
 
     public SettingsForm(AppConfig config)
     {
         _config = config;
 
-        Text = "NetClipboard · Impostazioni";
         Icon = IconFactory.Shared;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
@@ -66,7 +62,34 @@ public sealed class SettingsForm : ScaledForm
         MinimizeBox = false;
 
         BuildControls();
+        ApplyTexts();
         LoadFromConfig();
+    }
+
+    /// <summary>Tutti i testi in un punto solo (catalogo <see cref="L"/>, mai literal inline).</summary>
+    private void ApplyTexts()
+    {
+        Text = L.T("settings.title");
+        _lblName.Text = L.T("settings.name");
+        _lblPort.Text = L.T("settings.port");
+        _lblHistory.Text = L.T("settings.historySize");
+        _lblAge.Text = L.T("settings.maxAge");
+        _lblSize.Text = L.T("settings.maxSize");
+        _lblShare.Text = L.T("settings.share");
+        _shareText.Text = L.T("settings.shareText");
+        _shareImages.Text = L.T("settings.shareImages");
+        _shareFiles.Text = L.T("settings.shareFiles");
+        _autostart.Text = L.T("settings.autostart");
+        _autoScan.Text = L.T("settings.autoScan");
+        _autoUpdate.Text = L.T("settings.autoUpdate");
+        _lblUpdateUrl.Text = L.T("settings.updateUrl");
+        _updateUrl.PlaceholderText = L.T("settings.updateUrlPlaceholder");
+        _lblPeers.Text = L.T("settings.manualPeers");
+        _lblPeersHint.Text = L.T("settings.manualPeersHint");
+        _firewallBtn.Text = L.T("settings.firewallButton");
+        _ok.Text = L.T("common.save");
+        _cancel.Text = L.T("common.cancel");
+        UpdateFirewallLabel();
     }
 
     /// <summary>Scatta quando l'utente salva le impostazioni.</summary>
@@ -101,8 +124,6 @@ public sealed class SettingsForm : ScaledForm
             _firewall, _firewallBtn,
             _ok, _cancel,
         });
-
-        UpdateFirewallLabel();
     }
 
     protected override void ApplyLayout()
@@ -190,9 +211,7 @@ public sealed class SettingsForm : ScaledForm
 
     private void UpdateFirewallLabel()
     {
-        _firewall.Text = FirewallHelper.IsElevated()
-            ? "Regola firewall: puoi configurarla ora (sei admin)."
-            : "Se i PC non si vedono, configura la regola firewall (richiede admin).";
+        _firewall.Text = L.T(FirewallHelper.IsElevated() ? "settings.firewallAdmin" : "settings.firewallHint");
     }
 
     private void LoadFromConfig()

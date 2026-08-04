@@ -16,3 +16,9 @@ jobs:
           dotnet-version: '9.0.x'
       - name: Build
         run: dotnet build src/NetClipboard/NetClipboard.csproj -c Release
+
+      # Nessuna stringa utente sta nel codice: qui si verifica che ogni chiave
+      # usata da L.T() esista nei cataloghi e che le lingue siano allineate.
+      - name: Controlla i cataloghi delle lingue
+        shell: pwsh
+        run: pwsh tools/check-strings.ps1

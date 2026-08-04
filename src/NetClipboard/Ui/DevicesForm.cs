@@ -22,19 +22,19 @@ public sealed class DevicesForm : ScaledForm
     private readonly TrustStore _trust;
     private readonly ClipboardTransport _transport;
 
-    private readonly Label _titleSelf = new() { Text = "Questo dispositivo" };
-    private readonly Label _self;
-    private readonly Label _titleTrusted = new() { Text = "Dispositivi fidati" };
-    private readonly Label _titleDiscovered = new() { Text = "In rete — da accoppiare" };
-    private readonly Label _lblManualIp = new() { Text = "Oppure per IP:" };
+    private readonly Label _titleSelf = new();
+    private readonly Label _self = new() { ForeColor = Color.DimGray };
+    private readonly Label _titleTrusted = new();
+    private readonly Label _titleDiscovered = new();
+    private readonly Label _lblManualIp = new();
 
     private readonly ListView _trusted;
     private readonly ListView _discovered;
     private readonly TextBox _manualIp = new();
-    private readonly Button _revoke = new() { Text = "Revoca selezionato" };
-    private readonly Button _pair = new() { Text = "Accoppia selezionato" };
-    private readonly Button _scan = new() { Text = "Cerca in rete" };
-    private readonly Button _pairIp = new() { Text = "Accoppia per IP" };
+    private readonly Button _revoke = new();
+    private readonly Button _pair = new();
+    private readonly Button _scan = new();
+    private readonly Button _pairIp = new();
 
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 2000 };
     private bool _busy;
@@ -45,20 +45,15 @@ public sealed class DevicesForm : ScaledForm
         _trust = trust;
         _transport = transport;
 
-        Text = "NetClipboard · Dispositivi";
         Icon = IconFactory.Shared;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
 
-        _self = new Label
-        {
-            Text = $"{Environment.MachineName}   ·   impronta {DeviceIdentity.ShortFingerprint(_identity.DeviceId)}",
-            ForeColor = Color.DimGray,
-        };
-        _trusted = MakeList("Nome", "Impronta");
-        _discovered = MakeList("Nome", "Indirizzo");
+        _trusted = MakeList();
+        _discovered = MakeList();
+        ApplyTexts();
 
         _revoke.Click += (_, _) => RevokeSelected();
         _pair.Click += (_, _) => PairSelected();
@@ -76,6 +71,27 @@ public sealed class DevicesForm : ScaledForm
         _refresh.Tick += (_, _) => RefreshLists();
         _refresh.Start();
         RefreshLists();
+    }
+
+    /// <summary>Tutti i testi in un punto solo (catalogo <see cref="L"/>, mai literal inline).</summary>
+    private void ApplyTexts()
+    {
+        Text = L.T("devices.title");
+        _titleSelf.Text = L.T("devices.self");
+        _self.Text = L.T("devices.selfLine", Environment.MachineName,
+            DeviceIdentity.ShortFingerprint(_identity.DeviceId));
+        _titleTrusted.Text = L.T("devices.trusted");
+        _titleDiscovered.Text = L.T("devices.discovered");
+        _lblManualIp.Text = L.T("devices.byIp");
+        _revoke.Text = L.T("devices.revoke");
+        _pair.Text = L.T("devices.pair");
+        _scan.Text = L.T("devices.scan");
+        _pairIp.Text = L.T("devices.pairByIp");
+
+        _trusted.Columns[0].Text = L.T("common.name");
+        _trusted.Columns[1].Text = L.T("devices.fingerprint");
+        _discovered.Columns[0].Text = L.T("common.name");
+        _discovered.Columns[1].Text = L.T("devices.address");
     }
 
     protected override void ApplyLayout()
@@ -115,14 +131,14 @@ public sealed class DevicesForm : ScaledForm
         }
     }
 
-    private static ListView MakeList(string c1, string c2)
+    private static ListView MakeList()
     {
         var lv = new ListView
         {
             View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false,
         };
-        lv.Columns.Add(c1);
-        lv.Columns.Add(c2);
+        lv.Columns.Add(string.Empty); // le intestazioni le mette ApplyTexts()
+        lv.Columns.Add(string.Empty);
         return lv;
     }
 
@@ -178,7 +194,7 @@ public sealed class DevicesForm : ScaledForm
         if (_trusted.SelectedItems.Count == 0) return;
         var deviceId = (string)_trusted.SelectedItems[0].Tag!;
         var name = _trusted.SelectedItems[0].Text;
-        if (MessageBox.Show($"Revocare la fiducia a \"{name}\"?", "Revoca",
+        if (MessageBox.Show(L.T("devices.revokeConfirm", name), L.T("devices.revokeTitle"),
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
         {
             _trust.Revoke(deviceId);
@@ -190,8 +206,8 @@ public sealed class DevicesForm : ScaledForm
     {
         if (_discovered.SelectedItems.Count == 0)
         {
-            MessageBox.Show("Seleziona prima un dispositivo dall'elenco \"In rete\".",
-                "Pairing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(L.T("pairing.selectFirst"), L.T("pairing.title"),
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         var peer = (Peer)_discovered.SelectedItems[0].Tag!;
@@ -202,7 +218,7 @@ public sealed class DevicesForm : ScaledForm
     {
         if (!IPAddress.TryParse(_manualIp.Text.Trim(), out var ip))
         {
-            MessageBox.Show("Indirizzo IP non valido.", "Pairing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(L.T("pairing.badIp"), L.T("pairing.title"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
         StartPairing(ip, _transport.Port, ip.ToString());
@@ -212,7 +228,7 @@ public sealed class DevicesForm : ScaledForm
     {
         if (_busy)
         {
-            MessageBox.Show("Un pairing è già in corso.", "Pairing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(L.T("pairing.busy"), L.T("pairing.title"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         _busy = true;
@@ -224,11 +240,11 @@ public sealed class DevicesForm : ScaledForm
             RefreshLists();
             var msg = outcome switch
             {
-                PairOutcome.Paired => $"Accoppiato con \"{resolved}\".",
-                PairOutcome.Rejected => "Pairing rifiutato (codice non confermato su un lato).",
-                _ => "Pairing non riuscito (dispositivo non raggiungibile?).",
+                PairOutcome.Paired => L.T("pairing.done", resolved),
+                PairOutcome.Rejected => L.T("pairing.rejected"),
+                _ => L.T("pairing.failed"),
             };
-            MessageBox.Show(msg, "Pairing", MessageBoxButtons.OK,
+            MessageBox.Show(msg, L.T("pairing.title"), MessageBoxButtons.OK,
                 outcome == PairOutcome.Paired ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
         finally { _busy = false; }

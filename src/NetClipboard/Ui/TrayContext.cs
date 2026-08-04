@@ -66,39 +66,39 @@ public sealed class TrayContext : ApplicationContext
         _sharingEnabled = _config.StartSharingEnabled;
 
         var menu = new ContextMenuStrip();
-        _sharingItem = new ToolStripMenuItem("Condivisione attiva", null, (_, _) => ToggleSharing()) { Checked = _sharingEnabled };
+        _sharingItem = new ToolStripMenuItem(L.T("tray.sharing"), null, (_, _) => ToggleSharing()) { Checked = _sharingEnabled };
         menu.Items.Add(_sharingItem);
-        menu.Items.Add(new ToolStripMenuItem("Apri cronologia  (Win+Alt+V)", null, (_, _) => ShowHistory()));
-        menu.Items.Add(new ToolStripMenuItem("Invia clipboard ora", null, (_, _) => SendCurrentClipboard()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.openHistory"), null, (_, _) => ShowHistory()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.sendNow"), null, (_, _) => SendCurrentClipboard()));
         menu.Items.Add(new ToolStripSeparator());
-        _devicesItem = new ToolStripMenuItem("Dispositivi") { Enabled = false };
+        _devicesItem = new ToolStripMenuItem(L.T("tray.devices")) { Enabled = false };
         menu.Items.Add(_devicesItem);
-        menu.Items.Add(new ToolStripMenuItem("Dispositivi e pairing…", null, (_, _) => OpenDevices()));
-        menu.Items.Add(new ToolStripMenuItem("Cerca dispositivi in rete", null, (_, _) =>
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.devicesAndPairing"), null, (_, _) => OpenDevices()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.scan"), null, (_, _) =>
         {
             _transport.ScanOnDemand();
-            _tray!.ShowBalloonTip(1500, "NetClipboard", "Scansione avviata…", ToolTipIcon.Info);
+            Balloon(L.T("app.name"), L.T("msg.scanStarted"));
         }));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Impostazioni…", null, (_, _) => OpenSettings()));
-        menu.Items.Add(new ToolStripMenuItem("Configura firewall (admin)", null, (_, _) => ConfigureFirewall()));
-        menu.Items.Add(new ToolStripMenuItem("Riavvia rete", null, (_, _) =>
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.settings"), null, (_, _) => OpenSettings()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.firewall"), null, (_, _) => ConfigureFirewall()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.restartNetwork"), null, (_, _) =>
         {
             RestartNetwork();
-            _tray!.ShowBalloonTip(1500, "NetClipboard", "Rete riavviata.", ToolTipIcon.Info);
+            Balloon(L.T("app.name"), L.T("msg.networkRestarted"));
         }));
-        menu.Items.Add(new ToolStripMenuItem("Apri log diagnostico", null, (_, _) => OpenLog()));
-        menu.Items.Add(new ToolStripMenuItem("Controlla aggiornamenti", null, (_, _) => _ = CheckForUpdateAsync(true)));
-        _updateItem = new ToolStripMenuItem("Installa aggiornamento e riavvia", null, (_, _) => InstallPendingUpdate()) { Visible = false };
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.openLog"), null, (_, _) => OpenLog()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.checkUpdates"), null, (_, _) => _ = CheckForUpdateAsync(true)));
+        _updateItem = new ToolStripMenuItem(L.T("tray.installUpdate"), null, (_, _) => InstallPendingUpdate()) { Visible = false };
         menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Esci", null, (_, _) => ExitApp()));
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.exit"), null, (_, _) => ExitApp()));
         menu.Opening += (_, _) => RefreshDevicesMenu();
 
         _tray = new NotifyIcon
         {
             Icon = IconFactory.Create(_sharingEnabled),
-            Text = "NetClipboard",
+            Text = L.T("app.name"),
             Visible = true,
             ContextMenuStrip = menu,
         };
@@ -116,8 +116,7 @@ public sealed class TrayContext : ApplicationContext
 
         if (_trust.All.Count == 0)
             _monitor.BeginInvoke(() =>
-                _tray.ShowBalloonTip(5000, "Benvenuto in NetClipboard",
-                    "Apri \"Dispositivi e pairing\" per accoppiare i tuoi PC con un codice.", ToolTipIcon.Info));
+                _tray.ShowBalloonTip(5000, L.T("welcome.title"), L.T("welcome.body"), ToolTipIcon.Info));
 
         StartUpdateChecks();
     }
@@ -172,7 +171,7 @@ public sealed class TrayContext : ApplicationContext
         if (item.Kind != PayloadKind.Files)
         {
             var payload = _history.ToPayload(item);
-            if (payload == null) { Balloon("NetClipboard", "Contenuto non più disponibile.", ToolTipIcon.Warning); return; }
+            if (payload == null) { Balloon(L.T("app.name"), L.T("msg.contentGone"), ToolTipIcon.Warning); return; }
             _monitor.BeginInvoke(() => { _monitor.ApplyToClipboard(payload); PasteToTarget(target); });
             return;
         }
@@ -204,11 +203,11 @@ public sealed class TrayContext : ApplicationContext
                 PasteToTarget(target);
                 return;
             }
-            if (item.IsLocalOffer) { Balloon("NetClipboard", "I file originali non sono più disponibili.", ToolTipIcon.Warning); return; }
+            if (item.IsLocalOffer) { Balloon(L.T("app.name"), L.T("msg.originalsGone"), ToolTipIcon.Warning); return; }
             if (string.IsNullOrEmpty(item.OwnerId) || string.IsNullOrEmpty(item.OfferId)) return;
 
             var owner = _transport.Peers.FirstOrDefault(p => p.DeviceId == item.OwnerId && p.Trusted);
-            if (owner == null) { Balloon("NetClipboard", $"{item.OwnerName} non è in linea (o non fidato).", ToolTipIcon.Warning); return; }
+            if (owner == null) { Balloon(L.T("app.name"), L.T("msg.ownerOffline", item.OwnerName), ToolTipIcon.Warning); return; }
 
             var offerId = Guid.Parse(item.OfferId);
             var destDir = Path.Combine(AppConfig.AppDataDir, "received", offerId.ToString("N")[..8]);
@@ -216,7 +215,7 @@ public sealed class TrayContext : ApplicationContext
             using var cts = new CancellationTokenSource();
             ui = ShowTransfer(item, cts);
             var roots = await _transport.FetchAsync(owner, offerId, destDir, cts.Token, TransferProgress(ui));
-            if (roots.Count == 0) { Balloon("NetClipboard", "Nessun file ricevuto.", ToolTipIcon.Warning); return; }
+            if (roots.Count == 0) { Balloon(L.T("app.name"), L.T("msg.noFiles"), ToolTipIcon.Warning); return; }
 
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
@@ -228,7 +227,7 @@ public sealed class TrayContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            Balloon("NetClipboard", $"Download fallito: {ex.Message}", ToolTipIcon.Warning);
+            Balloon(L.T("app.name"), L.T("msg.downloadFailed", ex.Message), ToolTipIcon.Warning);
         }
         finally
         {
@@ -246,8 +245,9 @@ public sealed class TrayContext : ApplicationContext
         {
             var count = item.FileCount + item.DirCount;
             var f = new TransferForm(
-                $"Ricevo i file da {item.OwnerName}",
-                $"{count} element{(count == 1 ? "o" : "i")}  ·  {ClipboardPayload.HumanSize(item.TotalSize)}",
+                L.T("transfer.title", item.OwnerName),
+                L.T(count == 1 ? "transfer.subtitleOne" : "transfer.subtitleMany",
+                    count, ClipboardPayload.HumanSize(item.TotalSize)),
                 item.TotalSize, cts);
             f.ShowAfterDelay();
             return f;
@@ -328,9 +328,9 @@ public sealed class TrayContext : ApplicationContext
         if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
 
         var trusted = _transport.TrustedPeers.Count;
-        if (trusted == 0) { _tray.ShowBalloonTip(2000, "NetClipboard", "Nessun dispositivo fidato in linea.", ToolTipIcon.Info); return; }
+        if (trusted == 0) { Balloon(L.T("app.name"), L.T("msg.noTrustedOnline")); return; }
         _ = _transport.SendAsync(payload);
-        _tray.ShowBalloonTip(1500, "NetClipboard", $"Inviato a {trusted} dispositivo/i.", ToolTipIcon.Info);
+        Balloon(L.T("app.name"), L.T("msg.sentTo", trusted));
     }
 
     private void ToggleSharing()
@@ -355,7 +355,7 @@ public sealed class TrayContext : ApplicationContext
     private void ConfigureFirewall()
     {
         bool ok = FirewallHelper.IsElevated() ? FirewallHelper.InstallRulesNow() == 0 : FirewallHelper.RequestInstallElevated();
-        _tray.ShowBalloonTip(2500, "Firewall", ok ? "Regola creata." : "Configurazione annullata/non riuscita.",
+        Balloon(L.T("firewall.title"), L.T(ok ? "firewall.created" : "firewall.failed"),
             ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
@@ -368,18 +368,22 @@ public sealed class TrayContext : ApplicationContext
     {
         _devicesItem.DropDownItems.Clear();
         var peers = _transport.Peers.OrderByDescending(p => p.Trusted).ThenBy(p => p.Name).ToList();
-        if (peers.Count == 0) { _devicesItem.Text = "Dispositivi: nessuno"; return; }
-        _devicesItem.Text = $"Dispositivi: {peers.Count(p => p.Trusted)} fidati / {peers.Count} in linea";
+        if (peers.Count == 0) { _devicesItem.Text = L.T("tray.devicesNone"); return; }
+        _devicesItem.Text = L.T("tray.devicesCount", peers.Count(p => p.Trusted), peers.Count);
         foreach (var p in peers)
-            _devicesItem.DropDownItems.Add(new ToolStripMenuItem($"{(p.Trusted ? "🔒 " : "• ")}{p.Name}  ·  {p.Address}") { Enabled = false });
+        {
+            var mark = p.Trusted ? "🔒 " : "• "; // simboli, non testo da tradurre
+            _devicesItem.DropDownItems.Add(
+                new ToolStripMenuItem(mark + L.T("tray.peerLine", p.Name, p.Address)) { Enabled = false });
+        }
     }
 
     private void UpdateTrayText()
     {
         var trusted = _transport.TrustedPeers.Count;
-        var state = _sharingEnabled ? "attiva" : "in pausa";
-        var text = $"NetClipboard · {state} · {trusted} fidati";
-        _tray.Text = text.Length > 63 ? text[..63] : text;
+        var state = L.T(_sharingEnabled ? "tray.stateActive" : "tray.statePaused");
+        var text = L.T("tray.tooltip", state, trusted);
+        _tray.Text = text.Length > 63 ? text[..63] : text; // limite di Windows per il tooltip della tray
         _tray.Icon = IconFactory.Create(_sharingEnabled);
     }
 
@@ -399,25 +403,25 @@ public sealed class TrayContext : ApplicationContext
     private async Task CheckForUpdateAsync(bool manual)
     {
         var url = UpdateUrl;
-        if (!Updater.IsConfigured(url)) { if (manual) Balloon("Aggiornamenti", "Non configurati.", ToolTipIcon.Info); return; }
+        if (!Updater.IsConfigured(url)) { if (manual) Balloon(L.T("update.title"), L.T("update.notConfigured")); return; }
         var info = await Updater.CheckAsync(url, CancellationToken.None);
-        if (info == null) { if (manual) Balloon("Aggiornamenti", "Nessun aggiornamento disponibile."); return; }
+        if (info == null) { if (manual) Balloon(L.T("update.title"), L.T("update.none")); return; }
         var path = await Updater.DownloadAsync(info, CancellationToken.None);
-        if (path == null) { if (manual) Balloon("Aggiornamenti", "Download fallito (vedi log).", ToolTipIcon.Warning); return; }
+        if (path == null) { if (manual) Balloon(L.T("update.title"), L.T("update.downloadFailed"), ToolTipIcon.Warning); return; }
         _pendingUpdatePath = path;
         if (_monitor.IsHandleCreated)
             _monitor.BeginInvoke(() =>
             {
-                _updateItem.Text = $"Installa aggiornamento v{info.Version} e riavvia";
+                _updateItem.Text = L.T("tray.installUpdateVersion", info.Version);
                 _updateItem.Visible = true;
-                _tray.ShowBalloonTip(4000, "Aggiornamento disponibile", $"v{info.Version} pronto. Installa dal menu.", ToolTipIcon.Info);
+                _tray.ShowBalloonTip(4000, L.T("update.availableTitle"), L.T("update.availableBody", info.Version), ToolTipIcon.Info);
             });
     }
 
     private void InstallPendingUpdate()
     {
         if (_pendingUpdatePath == null || !File.Exists(_pendingUpdatePath))
-        { _tray.ShowBalloonTip(2000, "Aggiornamenti", "Nessun aggiornamento pronto.", ToolTipIcon.Warning); return; }
+        { Balloon(L.T("update.title"), L.T("update.nonePending"), ToolTipIcon.Warning); return; }
         if (Updater.ApplyAndRestart(_pendingUpdatePath))
         {
             _tray.Visible = false;
@@ -425,7 +429,7 @@ public sealed class TrayContext : ApplicationContext
             _discovery.Dispose(); _transport.Dispose(); _tray.Dispose();
             ExitThread();
         }
-        else _tray.ShowBalloonTip(3000, "Aggiornamenti", "Installazione fallita (vedi log).", ToolTipIcon.Warning);
+        else Balloon(L.T("update.title"), L.T("update.installFailed"), ToolTipIcon.Warning);
     }
 
     private void OpenLog()
@@ -435,7 +439,7 @@ public sealed class TrayContext : ApplicationContext
             if (!File.Exists(Log.FilePath)) Log.Write("(log)");
             Process.Start(new ProcessStartInfo(Log.FilePath) { UseShellExecute = true });
         }
-        catch (Exception ex) { _tray.ShowBalloonTip(2000, "NetClipboard", $"Impossibile aprire il log: {ex.Message}", ToolTipIcon.Warning); }
+        catch (Exception ex) { Balloon(L.T("app.name"), L.T("msg.logOpenFailed", ex.Message), ToolTipIcon.Warning); }
     }
 
     // ----- Utility -----
@@ -459,7 +463,7 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_warnedSize) return;
         _warnedSize = true;
-        _tray.ShowBalloonTip(3000, "NetClipboard", $"Contenuto oltre il limite di {_config.MaxTransferMb} MB: non inviato.", ToolTipIcon.Warning);
+        Balloon(L.T("app.name"), L.T("msg.tooBig", _config.MaxTransferMb), ToolTipIcon.Warning);
     }
 
     private void ExitApp()

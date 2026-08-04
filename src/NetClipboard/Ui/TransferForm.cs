@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using NetClipboard.Core;
 
 namespace NetClipboard.Ui;
 
@@ -28,7 +29,7 @@ public sealed class TransferForm : ScaledForm
     private readonly long _totalBytes;
     private readonly CancellationTokenSource _cts;
 
-    private readonly Button _cancelBtn = new() { Text = "Annulla" };
+    private readonly Button _cancelBtn = new();
     private readonly System.Windows.Forms.Timer _clock = new() { Interval = 250 };
     private readonly System.Windows.Forms.Timer _delayedShow = new() { Interval = 400 };
 
@@ -59,6 +60,7 @@ public sealed class TransferForm : ScaledForm
         BackColor = Bg;
         ForeColor = TextMain;
 
+        _cancelBtn.Text = L.T("common.cancel");
         _cancelBtn.FlatStyle = FlatStyle.Flat;
         _cancelBtn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 84);
         _cancelBtn.ForeColor = TextMain;
@@ -183,7 +185,7 @@ public sealed class TransferForm : ScaledForm
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         y += P(22);
 
-        var name = _cancelling ? "Annullamento…" : _current;
+        var name = _cancelling ? L.T("transfer.cancelling") : _current;
         TextRenderer.DrawText(g, name, _fName, new Rectangle(left, y, w, P(18)), TextMuted,
             TextFormatFlags.Left | TextFormatFlags.PathEllipsis | TextFormatFlags.NoPadding);
     }
@@ -220,24 +222,25 @@ public sealed class TransferForm : ScaledForm
 
     private string StatsLine()
     {
-        var done = Core.ClipboardPayload.HumanSize(_done);
-        var speed = _speed > 1 ? $"{Core.ClipboardPayload.HumanSize((long)_speed)}/s" : "…";
+        var done = ClipboardPayload.HumanSize(_done);
+        var speed = _speed > 1
+            ? L.T("transfer.perSecond", ClipboardPayload.HumanSize((long)_speed))
+            : L.T("transfer.speedUnknown");
         if (_totalBytes <= 0)
-            return $"{done}  ·  {speed}";
+            return L.T("transfer.statsNoTotal", done, speed);
 
         var pct = (int)Math.Round(Math.Clamp(_done * 100.0 / _totalBytes, 0, 100));
-        var total = Core.ClipboardPayload.HumanSize(_totalBytes);
-        return $"{pct}%  ·  {done} di {total}  ·  {speed}  ·  {Remaining()}";
+        return L.T("transfer.stats", pct, done, ClipboardPayload.HumanSize(_totalBytes), speed, Remaining());
     }
 
     private string Remaining()
     {
-        if (_speed < 1 || _totalBytes <= 0) return "calcolo…";
+        if (_speed < 1 || _totalBytes <= 0) return L.T("transfer.calculating");
         var secs = (_totalBytes - _done) / _speed;
-        if (secs < 5) return "quasi finito";
-        if (secs < 60) return $"circa {(int)secs} secondi";
-        if (secs < 3600) return $"circa {(int)(secs / 60)} minuti";
-        return "più di un'ora";
+        if (secs < 5) return L.T("transfer.almostDone");
+        if (secs < 60) return L.T("transfer.secondsLeft", (int)secs);
+        if (secs < 3600) return L.T("transfer.minutesLeft", (int)(secs / 60));
+        return L.T("transfer.overAnHour");
     }
 
     private void PlaceBottomRight()

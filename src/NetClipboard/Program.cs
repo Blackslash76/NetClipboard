@@ -57,6 +57,7 @@ internal static class Program
             return 0;
 
         ApplicationConfiguration.Initialize();
+        NetClipboard.Core.L.Init(); // lingua dei testi: prima di costruire qualunque UI
         Application.Run(new TrayContext());
         return 0;
     }

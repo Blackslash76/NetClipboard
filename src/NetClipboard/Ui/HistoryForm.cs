@@ -184,8 +184,8 @@ public sealed class HistoryForm : Form
         if (_list.SelectedItem is not HistoryItem item) return;
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add(item.Pinned ? "Rimuovi pin" : "Aggiungi pin", null, (_, _) => { _history.TogglePin(item.Id); Reload(); });
-        menu.Items.Add("Elimina", null, (_, _) => { _history.Remove(item.Id); Reload(); });
+        menu.Items.Add(L.T(item.Pinned ? "history.unpin" : "history.pin"), null, (_, _) => { _history.TogglePin(item.Id); Reload(); });
+        menu.Items.Add(L.T("common.delete"), null, (_, _) => { _history.Remove(item.Id); Reload(); });
         menu.Show(_list, e.Location);
     }
 
@@ -203,10 +203,10 @@ public sealed class HistoryForm : Form
         using (var clipTop = new SolidBrush(AccentA))
             g.FillRoundedRect(clipTop, new Rectangle(P(24), P(12), P(10), P(8)), P(3));
 
-        TextRenderer.DrawText(g, "NetClipboard", _fTitle, new Point(P(54), P(11)), Color.White, Color.Transparent);
-        TextRenderer.DrawText(g, "Appunti condivisi tra i tuoi dispositivi", _fSub,
+        TextRenderer.DrawText(g, L.T("app.name"), _fTitle, new Point(P(54), P(11)), Color.White, Color.Transparent);
+        TextRenderer.DrawText(g, L.T("history.subtitle"), _fSub,
             new Point(P(55), P(34)), Color.FromArgb(232, 242, 247), Color.Transparent);
-        TextRenderer.DrawText(g, "Invio incolla · Esc chiude", _fHint,
+        TextRenderer.DrawText(g, L.T("history.hint"), _fHint,
             new Rectangle(Width - P(200), P(21), P(190), P(20)), Color.FromArgb(235, 245, 250),
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
@@ -215,7 +215,7 @@ public sealed class HistoryForm : Form
             g.FillRectangle(fb, footRect);
         using (var line = new Pen(Color.FromArgb(45, 45, 55)))
             g.DrawLine(line, 0, footRect.Top, Width, footRect.Top);
-        TextRenderer.DrawText(g, "creato da Francesco Papeo", _fFooter, footRect,
+        TextRenderer.DrawText(g, L.T("history.credit"), _fFooter, footRect,
             Color.FromArgb(115, 117, 130), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     }
 
@@ -268,8 +268,9 @@ public sealed class HistoryForm : Form
 
         var pin = item.Pinned ? "📌 " : "";
         var toFetch = item.Kind == PayloadKind.Files && !item.IsLocalOffer
-            && (item.LocalRootPaths == null || item.LocalRootPaths.Count == 0) ? "  ·  da scaricare" : "";
-        var meta = $"{pin}{(item.IsLocal ? "questo PC" : item.Origin)}  ·  {LocalTime(item.TimestampUtc)}{toFetch}";
+            && (item.LocalRootPaths == null || item.LocalRootPaths.Count == 0) ? L.T("history.toDownload") : "";
+        var meta = L.T("history.meta", pin, item.IsLocal ? L.T("history.thisPc") : item.Origin,
+            LocalTime(item.TimestampUtc), toFetch);
         TextRenderer.DrawText(g, meta, _fMeta,
             new Rectangle(textLeft, row.Top + P(33), textWidth, P(20)), TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
@@ -308,10 +309,10 @@ public sealed class HistoryForm : Form
     {
         var local = utc.ToLocalTime();
         var delta = DateTime.Now - local;
-        if (delta.TotalSeconds < 60) return "adesso";
-        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes} min fa";
-        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours} h fa";
-        return local.ToString("dd/MM HH:mm");
+        if (delta.TotalSeconds < 60) return L.T("time.now");
+        if (delta.TotalMinutes < 60) return L.T("time.minutesAgo", (int)delta.TotalMinutes);
+        if (delta.TotalHours < 24) return L.T("time.hoursAgo", (int)delta.TotalHours);
+        return local.ToString(L.T("time.dateFormat"));
     }
 
     private static GraphicsPath RoundedRect(Rectangle r, int radius)

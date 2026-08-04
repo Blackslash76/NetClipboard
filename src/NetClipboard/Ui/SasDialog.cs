@@ -1,3 +1,4 @@
+using NetClipboard.Core;
 using NetClipboard.Net;
 
 namespace NetClipboard.Ui;
@@ -16,21 +17,19 @@ public sealed class SasDialog : ScaledForm
     private int _secondsLeft = 60;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
 
-    private readonly Label _title = new() { Text = "Verifica il dispositivo" };
+    private readonly Label _title = new();
     private readonly Label _peer;
     private readonly Label _code;
     private readonly Label _warn = new()
     {
-        Text = "Conferma SOLO se lo stesso codice appare sull'altro PC.",
         TextAlign = ContentAlignment.MiddleCenter,
         ForeColor = Color.Silver,
     };
-    private readonly Button _ok = new() { Text = "Confermo", DialogResult = DialogResult.OK };
-    private readonly Button _cancel = new() { Text = "Annulla", DialogResult = DialogResult.Cancel };
+    private readonly Button _ok = new() { DialogResult = DialogResult.OK };
+    private readonly Button _cancel = new() { DialogResult = DialogResult.Cancel };
 
     public SasDialog(PairingPrompt prompt)
     {
-        Text = "Conferma pairing";
         Icon = IconFactory.Shared;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
@@ -40,9 +39,15 @@ public sealed class SasDialog : ScaledForm
         BackColor = Color.FromArgb(28, 28, 34);
         ForeColor = Color.White;
 
+        Text = L.T("sas.title");
+        _title.Text = L.T("sas.heading");
+        _warn.Text = L.T("sas.warning");
+        _ok.Text = L.T("sas.confirm");
+        _cancel.Text = L.T("common.cancel");
+
         _peer = new Label
         {
-            Text = $"{prompt.PeerName}\nimpronta {prompt.Fingerprint}",
+            Text = L.T("sas.peerLine", prompt.PeerName, prompt.Fingerprint),
             ForeColor = Color.Gainsboro,
         };
         _code = new Label
@@ -67,7 +72,7 @@ public sealed class SasDialog : ScaledForm
         _timer.Tick += (_, _) =>
         {
             _secondsLeft--;
-            _ok.Text = $"Confermo ({_secondsLeft})";
+            _ok.Text = L.T("sas.confirmCountdown", _secondsLeft);
             if (_secondsLeft <= 0)
             {
                 _timer.Stop();

@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>NetClipboard</RootNamespace>
     <AssemblyName>NetClipboard</AssemblyName>
-    <Version>2.0.5</Version>
+    <Version>2.0.6</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Product>NetClipboard</Product>
     <Description>Clipboard condivisa peer-to-peer sulla LAN</Description>
@@ -17,6 +17,10 @@
 
   <ItemGroup>
     <EmbeddedResource Include="appicon.ico" />
+    <!-- Cataloghi delle lingue: incorporati nell'exe (niente assembly satellite,
+         che complicherebbero il publish single-file). Aggiungere una lingua =
+         aggiungere Resources/xx.json, senza toccare il csproj. -->
+    <EmbeddedResource Include="Resources\*.json" LogicalName="NetClipboard.Resources.%(Filename).json" />
   </ItemGroup>
 
 </Project>
