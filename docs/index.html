@@ -86,11 +86,11 @@
     <h1>Net<span class="grad">Clipboard</span></h1>
     <p class="tag">La clipboard <b>condivisa tra i tuoi PC</b> sulla rete locale. Copia qui, incolla là — testo, immagini e file. Sicura e senza cloud.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="https://github.com/Blackslash76/NetClipboard/releases/latest">⬇ Scarica per Windows</a>
+      <a id="dl-hero" class="btn btn-primary" href="https://github.com/Blackslash76/NetClipboard/releases/latest">⬇ Scarica per Windows</a>
       <a class="btn btn-ghost" href="https://github.com/Blackslash76/NetClipboard">★ Codice su GitHub</a>
     </div>
     <div class="badges">
-      <span class="badge"><b>v2.0.0</b></span>
+      <span class="badge" id="ver"><b>ultima versione</b></span>
       <span class="badge">Windows 10/11</span>
       <span class="badge">Licenza <b>MIT</b></span>
       <span class="badge">Open source</span>
@@ -150,13 +150,13 @@
         <div class="ic" style="margin:0 auto 14px">🧩</div>
         <h3>Installer</h3>
         <p style="margin-bottom:16px">Wizard classico, collegamenti, avvio con Windows.</p>
-        <a class="btn btn-primary" href="https://github.com/Blackslash76/NetClipboard/releases/latest">Scarica l'installer</a>
+        <a id="dl-setup" class="btn btn-primary" href="https://github.com/Blackslash76/NetClipboard/releases/latest">Scarica l'installer</a>
       </div>
       <div class="card">
         <div class="ic" style="margin:0 auto 14px">📦</div>
         <h3>Portable</h3>
         <p style="margin-bottom:16px">Un singolo <code>NetClipboard.exe</code>, nessuna installazione.</p>
-        <a class="btn btn-ghost" href="https://github.com/Blackslash76/NetClipboard/releases/latest">Scarica il portable</a>
+        <a id="dl-portable" class="btn btn-ghost" href="https://github.com/Blackslash76/NetClipboard/releases/latest">Scarica il portable</a>
       </div>
     </div>
     <p class="note">L'app gira nella tray. Se i PC non si vedono, dal menu usa "Configura firewall" (una volta).</p>
@@ -169,6 +169,30 @@
     <div class="mk">NetClipboard — clipboard condivisa peer-to-peer sulla LAN.</div>
   </div>
 </footer>
+
+<script>
+  // Versione e link di download presi in automatico dall'ultima release GitHub.
+  (function () {
+    fetch('https://api.github.com/repos/Blackslash76/NetClipboard/releases/latest')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        if (d.tag_name) {
+          var v = document.getElementById('ver');
+          if (v) v.innerHTML = '<b>' + d.tag_name + '</b>';
+        }
+        var setup = null, portable = null;
+        (d.assets || []).forEach(function (a) {
+          if (/Setup.*\.exe$/i.test(a.name)) setup = a.browser_download_url;
+          else if (/NetClipboard\.exe$/i.test(a.name)) portable = a.browser_download_url;
+        });
+        function set(id, url) { var e = document.getElementById(id); if (e && url) e.href = url; }
+        if (setup) { set('dl-hero', setup); set('dl-setup', setup); }
+        if (portable) set('dl-portable', portable);
+      })
+      .catch(function () { /* offline o rate-limit: restano i link alla pagina Releases */ });
+  })();
+</script>
 
 </body>
 </html>
