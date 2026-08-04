@@ -28,6 +28,7 @@ public sealed class DevicesForm : Form
         _transport = transport;
 
         Text = "NetClipboard · Dispositivi";
+        Icon = IconFactory.Shared;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;

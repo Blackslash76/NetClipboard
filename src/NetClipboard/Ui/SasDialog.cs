@@ -16,6 +16,7 @@ public sealed class SasDialog : Form
     public SasDialog(PairingPrompt prompt)
     {
         Text = "Conferma pairing";
+        Icon = IconFactory.Shared;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;

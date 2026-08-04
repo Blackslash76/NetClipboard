@@ -1,9 +1,13 @@
-# NetClipboard
+<p align="center"><img src="docs/logo.png" width="120" alt="NetClipboard"></p>
+
+<h1 align="center">NetClipboard</h1>
 
 Clipboard condivisa **peer-to-peer sulla LAN** per Windows, con **cronologia unificata
 tra tutti i tuoi device** (un "Win+V" cross-device). Supporta **testo, immagini e file**.
 
 Tray app leggera in **C# / WinForms / .NET 9**. Nessun server centrale.
+
+🌐 **Sito**: https://blackslash76.github.io/NetClipboard/ · ⬇ **Download**: [Releases](https://github.com/Blackslash76/NetClipboard/releases/latest) · 📄 **Licenza**: [MIT](LICENSE)
 
 ## Come funziona
 

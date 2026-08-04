@@ -12,6 +12,11 @@
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Product>NetClipboard</Product>
     <Description>Clipboard condivisa peer-to-peer sulla LAN</Description>
+    <ApplicationIcon>appicon.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="appicon.ico" />
+  </ItemGroup>
 
 </Project>

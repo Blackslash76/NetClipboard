@@ -394,27 +394,30 @@ public sealed class TrayContext : ApplicationContext
     }
 }
 
-/// <summary>Genera al volo un'icona per la tray (verde = attiva, grigia = in pausa).</summary>
+/// <summary>Icona del brand (appicon.ico embedded), usata per tray e finestre.</summary>
 internal static class IconFactory
 {
-    public static Icon Create(bool active)
+    private static Icon? _cached;
+
+    public static Icon Create(bool active) => Shared;
+
+    public static Icon Shared
     {
-        using var bmp = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(bmp))
+        get
         {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-            var body = new Rectangle(6, 4, 20, 26);
-            using var bodyBrush = new SolidBrush(active ? Color.FromArgb(30, 160, 90) : Color.FromArgb(110, 110, 118));
-            g.FillRectangle(bodyBrush, body);
-            using var clip = new SolidBrush(Color.FromArgb(230, 230, 235));
-            g.FillRectangle(clip, new Rectangle(11, 2, 10, 6));
-            using var line = new Pen(Color.White, 2);
-            g.DrawLine(line, 10, 13, 22, 13);
-            g.DrawLine(line, 10, 18, 22, 18);
-            g.DrawLine(line, 10, 23, 18, 23);
+            if (_cached != null)
+                return _cached;
+            try
+            {
+                using var s = System.Reflection.Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("NetClipboard.appicon.ico");
+                _cached = s != null ? new Icon(s) : SystemIcons.Application;
+            }
+            catch
+            {
+                _cached = SystemIcons.Application;
+            }
+            return _cached;
         }
-        var hicon = bmp.GetHicon();
-        return (Icon)Icon.FromHandle(hicon).Clone();
     }
 }

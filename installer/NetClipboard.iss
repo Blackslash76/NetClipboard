@@ -19,6 +19,7 @@ AppVersion={#MyAppVersion}
 AppPublisher=Francesco Papeo
 DefaultDirName={localappdata}\Programs\NetClipboard
 DisableProgramGroupPage=yes
+SetupIconFile=..\src\NetClipboard\appicon.ico
 UninstallDisplayIcon={app}\NetClipboard.exe
 OutputBaseFilename=NetClipboard-Setup-{#MyAppVersion}
 OutputDir=.

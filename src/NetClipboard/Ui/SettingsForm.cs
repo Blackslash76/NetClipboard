@@ -31,6 +31,7 @@ public sealed class SettingsForm : Form
         _config = config;
 
         Text = "NetClipboard · Impostazioni";
+        Icon = IconFactory.Shared;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
