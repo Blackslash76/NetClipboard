@@ -11,6 +11,11 @@ obj/
 [Dd]ebug/
 *.user
 
+# Artefatti installer / manifest generati
+installer/*.exe
+installer/Output/
+manifest.json
+
 # IDE
 .vs/
 .idea/

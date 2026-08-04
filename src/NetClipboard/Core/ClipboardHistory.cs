@@ -136,7 +136,7 @@ public sealed class ClipboardHistory
     private static void FillFromOffer(HistoryItem item, FileOffer offer, bool isLocal)
     {
         item.OfferId = offer.OfferId.ToString("N");
-        item.OwnerId = offer.OwnerId.ToString("N");
+        item.OwnerId = offer.OwnerDeviceId;
         item.OwnerName = offer.OwnerName;
         item.IsLocalOffer = isLocal;
         item.FileCount = offer.FileCount;

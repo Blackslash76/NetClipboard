@@ -98,7 +98,7 @@ public sealed class ClipboardPayload
         if (Kind == PayloadKind.Files && Offer != null)
         {
             var sb = new StringBuilder();
-            sb.Append(Offer.OwnerId.ToString("N"));
+            sb.Append(Offer.OwnerDeviceId);
             foreach (var e in Offer.Entries.OrderBy(e => e.RelativePath, StringComparer.Ordinal))
                 sb.Append('|').Append(e.RelativePath).Append(':').Append(e.Size);
             bytes = Encoding.UTF8.GetBytes(sb.ToString());

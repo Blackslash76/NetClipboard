@@ -2,19 +2,22 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.IO;
 using NetClipboard.Core;
+using NetClipboard.Core.Security;
 using NetClipboard.Net;
 using NetClipboard.Update;
 
 namespace NetClipboard.Ui;
 
 /// <summary>
-/// Cuore dell'app: vive nel system tray e collega clipboard, cronologia, scoperta
-/// dei peer e trasporto. Nessuna finestra principale.
+/// Cuore dell'app nel system tray. Collega clipboard, cronologia, identità
+/// per-dispositivo, scoperta e trasporto sicuro. Nessuna password: la fiducia è
+/// per-dispositivo (pairing con codice).
 /// </summary>
 public sealed class TrayContext : ApplicationContext
 {
     private readonly AppConfig _config;
-    private readonly SecureChannel _channel;
+    private readonly DeviceIdentity _identity;
+    private readonly TrustStore _trust;
     private readonly OfferStore _offerStore;
     private readonly ClipboardHistory _history;
     private readonly ClipboardMonitor _monitor;
@@ -28,8 +31,6 @@ public sealed class TrayContext : ApplicationContext
 
     private System.Threading.Timer? _updateTimer;
     private string? _pendingUpdatePath;
-    private Version? _pendingUpdateVersion;
-
     private bool _sharingEnabled;
     private bool _warnedSize;
 
@@ -38,44 +39,46 @@ public sealed class TrayContext : ApplicationContext
         _config = AppConfig.Load();
         _config.Save();
 
-        Log.Start($"NetClipboard avviato · {_config.DisplayName} · v{Updater.CurrentVersion} · porta {_config.Port} · " +
-                  $"password={(_config.HasPassword ? "impostata" : "MANCANTE")}");
-        Updater.CleanupOld(); // rimuove l'eseguibile .old di un update precedente
+        _identity = DeviceIdentity.LoadOrCreate();
+        _trust = new TrustStore();
 
-        _channel = new SecureChannel();
-        _channel.SetPassword(_config.Password);
+        Log.Start($"NetClipboard v{Updater.CurrentVersion} · {_config.DisplayName} · " +
+                  $"device {DeviceIdentity.ShortFingerprint(_identity.DeviceId)} · porta {_config.Port} · " +
+                  $"fidati: {_trust.All.Count}");
+        Updater.CleanupOld();
 
         _offerStore = new OfferStore();
         _history = new ClipboardHistory(_config);
         ClipboardHistory.CleanupReceived(_config.HistoryMaxAgeDays);
 
-        _monitor = new ClipboardMonitor(_config);
-        _ = _monitor.Handle; // forza la creazione dell'handle (senza mostrare)
+        _monitor = new ClipboardMonitor(_config) { OwnerDeviceId = _identity.DeviceId };
+        _ = _monitor.Handle;
 
-        _discovery = new PeerDiscovery(_config, _channel);
-        _transport = new ClipboardTransport(_config, _channel, _offerStore);
+        _transport = new ClipboardTransport(_config, _identity, _trust, _offerStore)
+        {
+            PairingConfirm = ShowSasDialog,
+        };
+        _discovery = new PeerDiscovery(_config, ip => _transport.AddCandidate(ip));
         _historyForm = new HistoryForm(_history);
 
         _sharingEnabled = _config.StartSharingEnabled;
 
         var menu = new ContextMenuStrip();
-        _sharingItem = new ToolStripMenuItem("Condivisione attiva", null, (_, _) => ToggleSharing())
-        {
-            Checked = _sharingEnabled,
-        };
+        _sharingItem = new ToolStripMenuItem("Condivisione attiva", null, (_, _) => ToggleSharing()) { Checked = _sharingEnabled };
         menu.Items.Add(_sharingItem);
         menu.Items.Add(new ToolStripMenuItem("Apri cronologia  (Win+Alt+V)", null, (_, _) => ShowHistory()));
         menu.Items.Add(new ToolStripMenuItem("Invia clipboard ora", null, (_, _) => SendCurrentClipboard()));
         menu.Items.Add(new ToolStripSeparator());
         _devicesItem = new ToolStripMenuItem("Dispositivi") { Enabled = false };
         menu.Items.Add(_devicesItem);
+        menu.Items.Add(new ToolStripMenuItem("Dispositivi e pairing…", null, (_, _) => OpenDevices()));
         menu.Items.Add(new ToolStripMenuItem("Cerca dispositivi in rete", null, (_, _) =>
         {
             _transport.ScanOnDemand();
-            _tray!.ShowBalloonTip(1500, "NetClipboard", "Scansione della rete avviata…", ToolTipIcon.Info);
+            _tray!.ShowBalloonTip(1500, "NetClipboard", "Scansione avviata…", ToolTipIcon.Info);
         }));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Impostazioni…", null, (_, _) => OpenSettings(false)));
+        menu.Items.Add(new ToolStripMenuItem("Impostazioni…", null, (_, _) => OpenSettings()));
         menu.Items.Add(new ToolStripMenuItem("Configura firewall (admin)", null, (_, _) => ConfigureFirewall()));
         menu.Items.Add(new ToolStripMenuItem("Riavvia rete", null, (_, _) =>
         {
@@ -84,10 +87,7 @@ public sealed class TrayContext : ApplicationContext
         }));
         menu.Items.Add(new ToolStripMenuItem("Apri log diagnostico", null, (_, _) => OpenLog()));
         menu.Items.Add(new ToolStripMenuItem("Controlla aggiornamenti", null, (_, _) => _ = CheckForUpdateAsync(true)));
-        _updateItem = new ToolStripMenuItem("Installa aggiornamento e riavvia", null, (_, _) => InstallPendingUpdate())
-        {
-            Visible = false,
-        };
+        _updateItem = new ToolStripMenuItem("Installa aggiornamento e riavvia", null, (_, _) => InstallPendingUpdate()) { Visible = false };
         menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Esci", null, (_, _) => ExitApp()));
@@ -105,92 +105,19 @@ public sealed class TrayContext : ApplicationContext
         _monitor.ClipboardChanged += OnLocalClipboard;
         _monitor.HistoryHotkeyPressed += ShowHistory;
         _transport.Received += OnRemoteReceived;
-        _transport.PeerSeen += info => _discovery.ReportPeer(info.Id, info.Name, info.Address, info.Port);
-        _transport.KnownPeersProvider = () =>
-            _discovery.Peers.Select(p => new PeerInfo(p.Id, p.Name, p.Address, p.TcpPort));
-        _discovery.PeersChanged += OnPeersChanged;
+        _transport.PeersChanged += OnPeersChanged;
+        _trust.Changed += () => { if (_monitor.IsHandleCreated) _monitor.BeginInvoke(UpdateTrayText); };
         _historyForm.ItemChosen += OnHistoryItemChosen;
 
         UpdateTrayText();
+        StartNetwork();
 
-        if (_channel.HasKey)
-            StartNetwork();
-        else
-            _monitor.BeginInvoke(() => OpenSettings(firstRun: true));
+        if (_trust.All.Count == 0)
+            _monitor.BeginInvoke(() =>
+                _tray.ShowBalloonTip(5000, "Benvenuto in NetClipboard",
+                    "Apri \"Dispositivi e pairing\" per accoppiare i tuoi PC con un codice.", ToolTipIcon.Info));
 
         StartUpdateChecks();
-    }
-
-    // ----- Auto-update -----
-
-    private void StartUpdateChecks()
-    {
-        if (!_config.AutoUpdateCheck || !Updater.IsConfigured(_config.UpdateManifestUrl))
-            return;
-        _updateTimer = new System.Threading.Timer(
-            _ => _ = CheckForUpdateAsync(false), null,
-            TimeSpan.FromSeconds(8), TimeSpan.FromHours(6));
-    }
-
-    private async Task CheckForUpdateAsync(bool manual)
-    {
-        var url = _config.UpdateManifestUrl;
-        if (!Updater.IsConfigured(url))
-        {
-            if (manual)
-                Balloon("Aggiornamenti", "Non configurati: imposta l'URL in Impostazioni.", ToolTipIcon.Info);
-            return;
-        }
-        if (manual)
-            Balloon("Aggiornamenti", "Controllo in corso…");
-
-        var info = await Updater.CheckAsync(url, CancellationToken.None);
-        if (info == null)
-        {
-            if (manual)
-                Balloon("Aggiornamenti", "Nessun aggiornamento disponibile.");
-            return;
-        }
-
-        var path = await Updater.DownloadAsync(info, CancellationToken.None);
-        if (path == null)
-        {
-            Balloon("Aggiornamenti", "Download dell'aggiornamento fallito (vedi log).", ToolTipIcon.Warning);
-            return;
-        }
-
-        _pendingUpdatePath = path;
-        _pendingUpdateVersion = info.Version;
-        if (_monitor.IsHandleCreated)
-            _monitor.BeginInvoke(() =>
-            {
-                _updateItem.Text = $"Installa aggiornamento v{info.Version} e riavvia";
-                _updateItem.Visible = true;
-                _tray.ShowBalloonTip(4000, "Aggiornamento disponibile",
-                    $"v{info.Version} pronto. Installa dal menu del tray.", ToolTipIcon.Info);
-            });
-    }
-
-    private void InstallPendingUpdate()
-    {
-        if (_pendingUpdatePath == null || !File.Exists(_pendingUpdatePath))
-        {
-            _tray.ShowBalloonTip(2000, "Aggiornamenti", "Nessun aggiornamento pronto.", ToolTipIcon.Warning);
-            return;
-        }
-        if (Updater.ApplyAndRestart(_pendingUpdatePath))
-        {
-            _tray.Visible = false;
-            _updateTimer?.Dispose();
-            _discovery.Dispose();
-            _transport.Dispose();
-            _tray.Dispose();
-            ExitThread();
-        }
-        else
-        {
-            _tray.ShowBalloonTip(3000, "Aggiornamenti", "Installazione fallita (vedi log).", ToolTipIcon.Warning);
-        }
     }
 
     private void StartNetwork()
@@ -200,89 +127,52 @@ public sealed class TrayContext : ApplicationContext
         _transport.Start();
     }
 
-    private void OpenLog()
-    {
-        try
-        {
-            if (!File.Exists(Log.FilePath))
-                Log.Write("(log)");
-            Process.Start(new ProcessStartInfo(Log.FilePath) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            _tray.ShowBalloonTip(2000, "NetClipboard", $"Impossibile aprire il log: {ex.Message}", ToolTipIcon.Warning);
-        }
-    }
-
     private void RestartNetwork()
     {
         _discovery.Stop();
         _transport.Stop();
-        if (_channel.HasKey)
-            StartNetwork();
+        StartNetwork();
     }
 
-    // ----- Clipboard locale -> cronologia + (eventuale) push -----
+    // ----- Clipboard locale -> cronologia + push ai fidati -----
 
     private void OnLocalClipboard(ClipboardPayload payload)
     {
-        // I file diventano un'offerta servibile su richiesta.
         if (payload.Kind == PayloadKind.Files && payload.Offer != null)
             _offerStore.Register(payload.Offer);
 
         _history.Add(payload, _config.DisplayName, isLocal: true);
 
-        if (!_sharingEnabled || !_channel.HasKey)
-            return;
-        if (!IsShareable(payload))
-            return;
-        if (payload.Kind != PayloadKind.Files && ExceedsSize(payload))
-        {
-            WarnSizeOnce();
-            return;
-        }
+        if (!_sharingEnabled) return;
+        if (!IsShareable(payload)) return;
+        if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
 
-        var peers = _discovery.Peers;
-        if (peers.Count > 0)
-            _ = _transport.SendAsync(payload, peers);
+        _ = _transport.SendAsync(payload);
     }
-
-    // ----- Ricezione push da un peer -----
 
     private void OnRemoteReceived(ReceivedClip clip)
     {
-        var name = ResolvePeerName(clip.FromId, clip.FromName);
         _monitor.BeginInvoke(() =>
         {
-            _history.Add(clip.Payload, name, isLocal: false);
-
-            // Mirror automatico solo per testo/immagine; i file restano "segnaposto".
+            _history.Add(clip.Payload, clip.FromName, isLocal: false);
             if (clip.Payload.Kind != PayloadKind.Files && _sharingEnabled)
                 _monitor.ApplyToClipboard(clip.Payload);
-
-            var hint = clip.Payload.Kind == PayloadKind.Files ? "  ·  Ctrl+Alt+V per incollare" : "";
-            _tray.ShowBalloonTip(2500, $"Da {name}", clip.Payload.ShortPreview() + hint, ToolTipIcon.Info);
+            var hint = clip.Payload.Kind == PayloadKind.Files ? "  ·  Win+Alt+V per incollare" : "";
+            _tray.ShowBalloonTip(2500, $"Da {clip.FromName}", clip.Payload.ShortPreview() + hint, ToolTipIcon.Info);
         });
     }
 
-    private string ResolvePeerName(Guid id, string fallback) =>
-        _discovery.Peers.FirstOrDefault(p => p.Id == id)?.Name ?? fallback;
-
-    // ----- Scelta dalla cronologia -----
+    // ----- Cronologia -----
 
     private void OnHistoryItemChosen(HistoryItem item)
     {
         if (item.Kind != PayloadKind.Files)
         {
             var payload = _history.ToPayload(item);
-            if (payload != null)
-                _monitor.BeginInvoke(() => _monitor.ApplyToClipboard(payload));
-            else
-                Balloon("NetClipboard", "Contenuto non piu' disponibile.", ToolTipIcon.Warning);
+            if (payload != null) _monitor.BeginInvoke(() => _monitor.ApplyToClipboard(payload));
+            else Balloon("NetClipboard", "Contenuto non più disponibile.", ToolTipIcon.Warning);
             return;
         }
-
-        // File/cartelle: materializza (riusa il locale o scarica dall'host).
         _ = Task.Run(() => MaterializeAsync(item));
     }
 
@@ -296,31 +186,17 @@ public sealed class TrayContext : ApplicationContext
                 Balloon("NetClipboard", "Pronto da incollare.");
                 return;
             }
-            if (item.IsLocalOffer)
-            {
-                Balloon("NetClipboard", "I file originali non sono piu' disponibili.", ToolTipIcon.Warning);
-                return;
-            }
-            if (string.IsNullOrEmpty(item.OwnerId) || string.IsNullOrEmpty(item.OfferId))
-                return;
+            if (item.IsLocalOffer) { Balloon("NetClipboard", "I file originali non sono più disponibili.", ToolTipIcon.Warning); return; }
+            if (string.IsNullOrEmpty(item.OwnerId) || string.IsNullOrEmpty(item.OfferId)) return;
 
-            var ownerId = Guid.Parse(item.OwnerId);
+            var owner = _transport.Peers.FirstOrDefault(p => p.DeviceId == item.OwnerId && p.Trusted);
+            if (owner == null) { Balloon("NetClipboard", $"{item.OwnerName} non è in linea (o non fidato).", ToolTipIcon.Warning); return; }
+
             var offerId = Guid.Parse(item.OfferId);
-            var owner = _discovery.Peers.FirstOrDefault(p => p.Id == ownerId);
-            if (owner == null)
-            {
-                Balloon("NetClipboard", $"{item.OwnerName} non e' in linea: impossibile scaricare.", ToolTipIcon.Warning);
-                return;
-            }
-
             Balloon("NetClipboard", $"Scarico da {item.OwnerName} · {ClipboardPayload.HumanSize(item.TotalSize)}…");
             var destDir = Path.Combine(AppConfig.AppDataDir, "received", offerId.ToString("N")[..8]);
             var roots = await _transport.FetchAsync(owner, offerId, destDir, CancellationToken.None);
-            if (roots.Count == 0)
-            {
-                Balloon("NetClipboard", "Nessun file ricevuto.", ToolTipIcon.Warning);
-                return;
-            }
+            if (roots.Count == 0) { Balloon("NetClipboard", "Nessun file ricevuto.", ToolTipIcon.Warning); return; }
 
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
@@ -334,47 +210,48 @@ public sealed class TrayContext : ApplicationContext
 
     private void ApplyFiles(IReadOnlyList<string> roots)
     {
-        if (_monitor.IsHandleCreated)
-            _monitor.BeginInvoke(() => _monitor.ApplyFilesToClipboard(roots));
+        if (_monitor.IsHandleCreated) _monitor.BeginInvoke(() => _monitor.ApplyFilesToClipboard(roots));
     }
 
     private static bool Exists(string p) => File.Exists(p) || Directory.Exists(p);
+
+    // ----- Pairing / dispositivi -----
+
+    private bool ShowSasDialog(PairingPrompt prompt)
+    {
+        if (!_monitor.IsHandleCreated) return false;
+        return (bool)_monitor.Invoke(new Func<bool>(() =>
+        {
+            using var dlg = new SasDialog(prompt);
+            return dlg.ShowDialog() == DialogResult.OK;
+        }));
+    }
+
+    private void OpenDevices()
+    {
+        using var form = new DevicesForm(_identity, _trust, _transport);
+        form.ShowDialog();
+    }
 
     // ----- Comandi UI -----
 
     private void ShowHistory()
     {
-        if (_historyForm.Visible)
-            _historyForm.Hide();
-        else
-            _historyForm.ShowNearCursor();
+        if (_historyForm.Visible) _historyForm.Hide();
+        else _historyForm.ShowNearCursor();
     }
 
     private void SendCurrentClipboard()
     {
-        if (!_channel.HasKey)
-        {
-            OpenSettings(false);
-            return;
-        }
         var payload = _monitor.TryReadClipboard();
-        if (payload == null)
-            return;
-        if (payload.Kind == PayloadKind.Files && payload.Offer != null)
-            _offerStore.Register(payload.Offer);
-        if (payload.Kind != PayloadKind.Files && ExceedsSize(payload))
-        {
-            WarnSizeOnce();
-            return;
-        }
-        var peers = _discovery.Peers;
-        if (peers.Count == 0)
-        {
-            _tray.ShowBalloonTip(2000, "NetClipboard", "Nessun dispositivo in linea.", ToolTipIcon.Info);
-            return;
-        }
-        _ = _transport.SendAsync(payload, peers);
-        _tray.ShowBalloonTip(1500, "NetClipboard", $"Inviato a {peers.Count} dispositivo/i.", ToolTipIcon.Info);
+        if (payload == null) return;
+        if (payload.Kind == PayloadKind.Files && payload.Offer != null) _offerStore.Register(payload.Offer);
+        if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
+
+        var trusted = _transport.TrustedPeers.Count;
+        if (trusted == 0) { _tray.ShowBalloonTip(2000, "NetClipboard", "Nessun dispositivo fidato in linea.", ToolTipIcon.Info); return; }
+        _ = _transport.SendAsync(payload);
+        _tray.ShowBalloonTip(1500, "NetClipboard", $"Inviato a {trusted} dispositivo/i.", ToolTipIcon.Info);
     }
 
     private void ToggleSharing()
@@ -386,16 +263,11 @@ public sealed class TrayContext : ApplicationContext
         UpdateTrayText();
     }
 
-    private void OpenSettings(bool firstRun)
+    private void OpenSettings()
     {
-        if (firstRun)
-            _tray.ShowBalloonTip(3000, "Benvenuto in NetClipboard",
-                "Imposta una password condivisa uguale su tutti i PC.", ToolTipIcon.Info);
-
         using var form = new SettingsForm(_config);
         if (form.ShowDialog() == DialogResult.OK)
         {
-            _channel.SetPassword(_config.Password);
             RestartNetwork();
             UpdateTrayText();
         }
@@ -403,49 +275,92 @@ public sealed class TrayContext : ApplicationContext
 
     private void ConfigureFirewall()
     {
-        bool ok = FirewallHelper.IsElevated()
-            ? FirewallHelper.InstallRulesNow() == 0
-            : FirewallHelper.RequestInstallElevated();
-        _tray.ShowBalloonTip(2500, "Firewall",
-            ok ? "Regola creata correttamente." : "Configurazione annullata o non riuscita.",
+        bool ok = FirewallHelper.IsElevated() ? FirewallHelper.InstallRulesNow() == 0 : FirewallHelper.RequestInstallElevated();
+        _tray.ShowBalloonTip(2500, "Firewall", ok ? "Regola creata." : "Configurazione annullata/non riuscita.",
             ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
     private void OnPeersChanged()
     {
-        if (_monitor.IsHandleCreated)
-            _monitor.BeginInvoke(UpdateTrayText);
+        if (_monitor.IsHandleCreated) _monitor.BeginInvoke(UpdateTrayText);
     }
 
     private void RefreshDevicesMenu()
     {
         _devicesItem.DropDownItems.Clear();
-        var peers = _discovery.Peers.OrderBy(p => p.Name).ToList();
-        if (peers.Count == 0)
-        {
-            _devicesItem.Text = "Dispositivi: nessuno";
-            return;
-        }
-        _devicesItem.Text = $"Dispositivi: {peers.Count}";
+        var peers = _transport.Peers.OrderByDescending(p => p.Trusted).ThenBy(p => p.Name).ToList();
+        if (peers.Count == 0) { _devicesItem.Text = "Dispositivi: nessuno"; return; }
+        _devicesItem.Text = $"Dispositivi: {peers.Count(p => p.Trusted)} fidati / {peers.Count} in linea";
         foreach (var p in peers)
-            _devicesItem.DropDownItems.Add(new ToolStripMenuItem($"{p.Name}  ·  {p.Address}") { Enabled = false });
+            _devicesItem.DropDownItems.Add(new ToolStripMenuItem($"{(p.Trusted ? "🔒 " : "• ")}{p.Name}  ·  {p.Address}") { Enabled = false });
     }
 
     private void UpdateTrayText()
     {
-        var count = _discovery.Peers.Count;
-        var state = _channel.HasKey ? (_sharingEnabled ? "attiva" : "in pausa") : "nessuna password";
-        var text = $"NetClipboard · {state} · {count} device";
+        var trusted = _transport.TrustedPeers.Count;
+        var state = _sharingEnabled ? "attiva" : "in pausa";
+        var text = $"NetClipboard · {state} · {trusted} fidati";
         _tray.Text = text.Length > 63 ? text[..63] : text;
-        _tray.Icon = IconFactory.Create(_sharingEnabled && _channel.HasKey);
+        _tray.Icon = IconFactory.Create(_sharingEnabled);
+    }
+
+    // ----- Auto-update -----
+
+    private void StartUpdateChecks()
+    {
+        if (!_config.AutoUpdateCheck || !Updater.IsConfigured(_config.UpdateManifestUrl)) return;
+        _updateTimer = new System.Threading.Timer(_ => _ = CheckForUpdateAsync(false), null,
+            TimeSpan.FromSeconds(8), TimeSpan.FromHours(6));
+    }
+
+    private async Task CheckForUpdateAsync(bool manual)
+    {
+        var url = _config.UpdateManifestUrl;
+        if (!Updater.IsConfigured(url)) { if (manual) Balloon("Aggiornamenti", "Non configurati: imposta l'URL in Impostazioni.", ToolTipIcon.Info); return; }
+        if (manual) Balloon("Aggiornamenti", "Controllo in corso…");
+        var info = await Updater.CheckAsync(url, CancellationToken.None);
+        if (info == null) { if (manual) Balloon("Aggiornamenti", "Nessun aggiornamento disponibile."); return; }
+        var path = await Updater.DownloadAsync(info, CancellationToken.None);
+        if (path == null) { Balloon("Aggiornamenti", "Download fallito (vedi log).", ToolTipIcon.Warning); return; }
+        _pendingUpdatePath = path;
+        if (_monitor.IsHandleCreated)
+            _monitor.BeginInvoke(() =>
+            {
+                _updateItem.Text = $"Installa aggiornamento v{info.Version} e riavvia";
+                _updateItem.Visible = true;
+                _tray.ShowBalloonTip(4000, "Aggiornamento disponibile", $"v{info.Version} pronto. Installa dal menu.", ToolTipIcon.Info);
+            });
+    }
+
+    private void InstallPendingUpdate()
+    {
+        if (_pendingUpdatePath == null || !File.Exists(_pendingUpdatePath))
+        { _tray.ShowBalloonTip(2000, "Aggiornamenti", "Nessun aggiornamento pronto.", ToolTipIcon.Warning); return; }
+        if (Updater.ApplyAndRestart(_pendingUpdatePath))
+        {
+            _tray.Visible = false;
+            _updateTimer?.Dispose();
+            _discovery.Dispose(); _transport.Dispose(); _tray.Dispose();
+            ExitThread();
+        }
+        else _tray.ShowBalloonTip(3000, "Aggiornamenti", "Installazione fallita (vedi log).", ToolTipIcon.Warning);
+    }
+
+    private void OpenLog()
+    {
+        try
+        {
+            if (!File.Exists(Log.FilePath)) Log.Write("(log)");
+            Process.Start(new ProcessStartInfo(Log.FilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex) { _tray.ShowBalloonTip(2000, "NetClipboard", $"Impossibile aprire il log: {ex.Message}", ToolTipIcon.Warning); }
     }
 
     // ----- Utility -----
 
     private void Balloon(string title, string text, ToolTipIcon icon = ToolTipIcon.Info)
     {
-        if (_monitor.IsHandleCreated)
-            _monitor.BeginInvoke(() => _tray.ShowBalloonTip(2500, title, text, icon));
+        if (_monitor.IsHandleCreated) _monitor.BeginInvoke(() => _tray.ShowBalloonTip(2500, title, text, icon));
     }
 
     private bool IsShareable(ClipboardPayload p) => p.Kind switch
@@ -456,15 +371,13 @@ public sealed class TrayContext : ApplicationContext
         _ => false,
     };
 
-    private bool ExceedsSize(ClipboardPayload p) =>
-        p.ApproxSize() > _config.MaxTransferMb * 1024L * 1024L;
+    private bool ExceedsSize(ClipboardPayload p) => p.ApproxSize() > _config.MaxTransferMb * 1024L * 1024L;
 
     private void WarnSizeOnce()
     {
         if (_warnedSize) return;
         _warnedSize = true;
-        _tray.ShowBalloonTip(3000, "NetClipboard",
-            $"Contenuto oltre il limite di {_config.MaxTransferMb} MB: non inviato.", ToolTipIcon.Warning);
+        _tray.ShowBalloonTip(3000, "NetClipboard", $"Contenuto oltre il limite di {_config.MaxTransferMb} MB: non inviato.", ToolTipIcon.Warning);
     }
 
     private void ExitApp()
@@ -476,6 +389,7 @@ public sealed class TrayContext : ApplicationContext
         _tray.Dispose();
         _historyForm.Dispose();
         _monitor.Dispose();
+        _identity.Dispose();
         ExitThread();
     }
 }
@@ -490,14 +404,11 @@ internal static class IconFactory
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Color.Transparent);
-
             var body = new Rectangle(6, 4, 20, 26);
             using var bodyBrush = new SolidBrush(active ? Color.FromArgb(30, 160, 90) : Color.FromArgb(110, 110, 118));
             g.FillRectangle(bodyBrush, body);
-
             using var clip = new SolidBrush(Color.FromArgb(230, 230, 235));
             g.FillRectangle(clip, new Rectangle(11, 2, 10, 6));
-
             using var line = new Pen(Color.White, 2);
             g.DrawLine(line, 10, 13, 22, 13);
             g.DrawLine(line, 10, 18, 22, 18);

@@ -31,7 +31,7 @@ public sealed class FileOffer
     public const int MaxEntries = 50_000;
 
     public Guid OfferId { get; set; }
-    public Guid OwnerId { get; set; }
+    public string OwnerDeviceId { get; set; } = "";
     public string OwnerName { get; set; } = "";
     public List<FileEntry> Entries { get; set; } = new();
 
@@ -61,7 +61,7 @@ public sealed class FileOffer
     public void WriteTo(BinaryWriter w)
     {
         w.Write(OfferId.ToByteArray());
-        w.Write(OwnerId.ToByteArray());
+        WriteString(w, OwnerDeviceId);
         WriteString(w, OwnerName);
         w.Write(Entries.Count);
         foreach (var e in Entries)
@@ -78,7 +78,7 @@ public sealed class FileOffer
         var offer = new FileOffer
         {
             OfferId = new Guid(r.ReadBytes(16)),
-            OwnerId = new Guid(r.ReadBytes(16)),
+            OwnerDeviceId = ReadString(r),
             OwnerName = ReadString(r),
         };
         var count = r.ReadInt32();
@@ -115,12 +115,12 @@ public sealed class FileOffer
     /// espanse ricorsivamente (file + sottocartelle, comprese quelle vuote).
     /// Ritorna null se supera <see cref="MaxEntries"/>.
     /// </summary>
-    public static FileOffer? FromPaths(IEnumerable<string> topLevelPaths, Guid ownerId, string ownerName)
+    public static FileOffer? FromPaths(IEnumerable<string> topLevelPaths, string ownerDeviceId, string ownerName)
     {
         var offer = new FileOffer
         {
             OfferId = Guid.NewGuid(),
-            OwnerId = ownerId,
+            OwnerDeviceId = ownerDeviceId,
             OwnerName = ownerName,
             RootParents = new List<string>(),
         };

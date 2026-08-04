@@ -63,12 +63,28 @@ jobs:
           }
           Get-Content manifest.json
 
+      - name: Installa Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Costruisci l'installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DMyAppVersion=${{ steps.ver.outputs.version }} `
+            /DSourceExe=publish\NetClipboard.exe `
+            installer\NetClipboard.iss
+          $setup = "installer\NetClipboard-Setup-${{ steps.ver.outputs.version }}.exe"
+          if (-not (Test-Path $setup)) { throw "Installer non generato" }
+          Write-Host "Installer: $setup"
+
       - name: Crea GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: NetClipboard ${{ github.ref_name }}
           files: |
             publish/NetClipboard.exe
+            installer/NetClipboard-Setup-*.exe
             manifest.json
           make_latest: true
           generate_release_notes: true
