@@ -72,7 +72,7 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             /DMyAppVersion=${{ steps.ver.outputs.version }} `
-            /DSourceExe=publish\NetClipboard.exe `
+            "/DSourceExe=${{ github.workspace }}\publish\NetClipboard.exe" `
             installer\NetClipboard.iss
           $setup = "installer\NetClipboard-Setup-${{ steps.ver.outputs.version }}.exe"
           if (-not (Test-Path $setup)) { throw "Installer non generato" }
