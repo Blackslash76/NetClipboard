@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -9,45 +8,34 @@ using NetClipboard.Core;
 namespace NetClipboard.Net;
 
 /// <summary>
-/// Scoperta automatica dei peer via broadcast UDP. Ogni istanza annuncia se
-/// stessa ogni pochi secondi; gli annunci sono cifrati con la passphrase
-/// condivisa, quindi solo chi ha la password viene "visto".
+/// Scoperta di presenza via broadcast UDP (in chiaro): serve solo a segnalare
+/// "qui c'è un NetClipboard, prova a contattarmi". L'identità e la fiducia sono
+/// stabilite dall'handshake TCP autenticato del trasporto. Ogni IP da cui arriva
+/// un annuncio viene passato al trasporto come candidato da contattare.
 ///
-/// L'annuncio viene inviato al broadcast limitato (255.255.255.255) E al
-/// broadcast diretto di ogni scheda/subnet, per gestire PC con piu' schede
-/// (VPN, macchine virtuali, Wi-Fi + Ethernet).
-///
-/// Annuncio (dopo decifratura): [magic 'N''C'][ver=1][origin 16][tcpPort:4][nameLen:4][utf8 name]
+/// Annuncio: [magic 'N''C'][ver=2][tcpPort:4]
 /// </summary>
 public sealed class PeerDiscovery : IDisposable
 {
-    private const byte Version = 1;
+    private const byte Version = 2;
     private static readonly byte[] Magic = { (byte)'N', (byte)'C' };
     private const int AnnounceIntervalMs = 3000;
-    private static readonly TimeSpan PeerTtl = TimeSpan.FromSeconds(12);
 
     private readonly AppConfig _config;
-    private readonly SecureChannel _channel;
-    private readonly ConcurrentDictionary<Guid, Peer> _peers = new();
+    private readonly Action<IPAddress> _onCandidate;
+    private readonly HashSet<string> _localIps;
 
     private UdpClient? _udp;
-    private System.Threading.Timer? _announceTimer;
+    private System.Threading.Timer? _timer;
     private CancellationTokenSource? _cts;
-
-    private bool _loggedSelf;
-    private int _announceCount;
-    private DateTime _lastFailLogUtc = DateTime.MinValue;
     private string _lastTargets = "";
 
-    public event Action? PeersChanged;
-
-    public PeerDiscovery(AppConfig config, SecureChannel channel)
+    public PeerDiscovery(AppConfig config, Action<IPAddress> onCandidate)
     {
         _config = config;
-        _channel = channel;
+        _onCandidate = onCandidate;
+        _localIps = LocalIPv4().ToHashSet();
     }
-
-    public IReadOnlyCollection<Peer> Peers => _peers.Values.ToList();
 
     public void Start()
     {
@@ -63,73 +51,47 @@ public sealed class PeerDiscovery : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Write($"[Discovery] BIND FALLITO su UDP {_config.Port}: {ex.Message}");
+            Log.Write($"[Discovery] bind UDP {_config.Port} fallito: {ex.Message}");
             udp.Dispose();
             return;
         }
         _udp = udp;
-
-        Log.Write($"[Discovery] avviato · UDP {_config.Port} · IP locali: {string.Join(", ", LocalIPv4())}");
+        Log.Write($"[Discovery] avviato · UDP {_config.Port} · IP locali: {string.Join(", ", _localIps)}");
 
         _ = Task.Run(() => ReceiveLoopAsync(_cts.Token));
-        _announceTimer = new System.Threading.Timer(_ => Tick(), null, 0, AnnounceIntervalMs);
+        _timer = new System.Threading.Timer(_ => SendAnnounce(), null, 0, AnnounceIntervalMs);
     }
 
     public void Stop()
     {
         _cts?.Cancel();
-        _announceTimer?.Dispose();
-        _announceTimer = null;
-        _udp?.Dispose();
-        _udp = null;
-        _cts?.Dispose();
-        _cts = null;
-    }
-
-    private void Tick()
-    {
-        SendAnnounce();
-        ExpirePeers();
+        _timer?.Dispose(); _timer = null;
+        _udp?.Dispose(); _udp = null;
+        _cts?.Dispose(); _cts = null;
     }
 
     private void SendAnnounce()
     {
         var udp = _udp;
-        if (udp == null || !_channel.HasKey)
-            return;
-
+        if (udp == null) return;
         try
         {
             using var ms = new MemoryStream();
-            using (var w = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true))
+            using (var w = new BinaryWriter(ms))
             {
                 w.Write(Magic);
                 w.Write(Version);
-                w.Write(_config.InstanceId.ToByteArray());
                 w.Write(_config.Port);
-                var nb = Encoding.UTF8.GetBytes(_config.DisplayName);
-                w.Write(nb.Length);
-                w.Write(nb);
             }
-            var blob = _channel.Encrypt(ms.ToArray());
-
+            var data = ms.ToArray();
             var targets = BroadcastTargets();
-            var targetStr = string.Join(", ", targets.Select(t => t.ToString()));
-            if (targetStr != _lastTargets)
-            {
-                Log.Write($"[Discovery] destinazioni broadcast: {targetStr}");
-                _lastTargets = targetStr;
-            }
-
+            var ts = string.Join(", ", targets.Select(t => t.ToString()));
+            if (ts != _lastTargets) { Log.Write($"[Discovery] broadcast verso: {ts}"); _lastTargets = ts; }
             foreach (var t in targets)
             {
-                try { udp.Send(blob, blob.Length, new IPEndPoint(t, _config.Port)); }
-                catch (Exception ex) { Log.Write($"[Discovery] send -> {t} fallito: {ex.Message}"); }
+                try { udp.Send(data, data.Length, new IPEndPoint(t, _config.Port)); }
+                catch { }
             }
-
-            // Heartbeat ogni ~15s per non intasare il log.
-            if (_announceCount++ % 5 == 0)
-                Log.Write($"[Discovery] annuncio inviato a {targets.Count} destinazioni (peer noti: {_peers.Count})");
         }
         catch (Exception ex)
         {
@@ -140,154 +102,47 @@ public sealed class PeerDiscovery : IDisposable
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
         var udp = _udp;
-        if (udp == null)
-            return;
-
+        if (udp == null) return;
         while (!ct.IsCancellationRequested)
         {
             UdpReceiveResult res;
-            try
-            {
-                res = await udp.ReceiveAsync(ct);
-            }
+            try { res = await udp.ReceiveAsync(ct); }
             catch (OperationCanceledException) { break; }
             catch (ObjectDisposedException) { break; }
-            catch (Exception ex)
+            catch { continue; }
+
+            var b = res.Buffer;
+            if (b.Length >= 3 && b[0] == Magic[0] && b[1] == Magic[1] && b[2] == Version)
             {
-                Log.Write($"[Discovery] receive error: {ex.Message}");
-                continue;
-            }
-
-            HandleDatagram(res.Buffer, res.RemoteEndPoint.Address);
-        }
-    }
-
-    private void HandleDatagram(byte[] blob, IPAddress from)
-    {
-        var plain = _channel.TryDecrypt(blob);
-        if (plain == null)
-        {
-            // Pacchetti che arrivano ma non si decifrano = password diversa o rumore.
-            if ((DateTime.UtcNow - _lastFailLogUtc).TotalSeconds > 5)
-            {
-                _lastFailLogUtc = DateTime.UtcNow;
-                Log.Write($"[Discovery] RX da {from}: non decifrabile (password diversa?) len={blob.Length}");
-            }
-            return;
-        }
-
-        try
-        {
-            using var ms = new MemoryStream(plain);
-            using var r = new BinaryReader(ms, Encoding.UTF8, leaveOpen: true);
-            var magic = r.ReadBytes(2);
-            if (magic.Length != 2 || magic[0] != Magic[0] || magic[1] != Magic[1])
-                return;
-            if (r.ReadByte() != Version)
-                return;
-            var id = new Guid(r.ReadBytes(16));
-            var tcpPort = r.ReadInt32();
-            var nameLen = r.ReadInt32();
-            var name = Encoding.UTF8.GetString(r.ReadBytes(nameLen));
-
-            if (id == _config.InstanceId)
-            {
-                if (!_loggedSelf)
-                {
-                    _loggedSelf = true;
-                    Log.Write($"[Discovery] RX del proprio annuncio da {from} (invio+ricezione locali OK)");
-                }
-                return;
-            }
-
-            AddOrUpdatePeer(id, name, from, tcpPort, "broadcast");
-        }
-        catch (Exception ex)
-        {
-            Log.Write($"[Discovery] parse annuncio: {ex.Message}");
-        }
-    }
-
-    /// <summary>Registra un peer scoperto per altra via (es. hello TCP manuale).</summary>
-    public void ReportPeer(Guid id, string name, IPAddress addr, int port)
-    {
-        if (id == _config.InstanceId)
-            return;
-        AddOrUpdatePeer(id, name, addr, port, "TCP");
-    }
-
-    private void AddOrUpdatePeer(Guid id, string name, IPAddress addr, int port, string source)
-    {
-        var isNew = !_peers.ContainsKey(id);
-        _peers.AddOrUpdate(id,
-            _ => new Peer { Id = id, Name = name, Address = addr, TcpPort = port },
-            (_, existing) =>
-            {
-                existing.Name = name;
-                existing.Address = addr;
-                existing.TcpPort = port;
-                existing.LastSeenUtc = DateTime.UtcNow;
-                return existing;
-            });
-
-        if (isNew)
-        {
-            Log.Write($"[Discovery] PEER TROVATO ({source}): {name} @ {addr}:{port}");
-            PeersChanged?.Invoke();
-        }
-    }
-
-    private void ExpirePeers()
-    {
-        var now = DateTime.UtcNow;
-        var removed = false;
-        foreach (var kv in _peers)
-        {
-            if (now - kv.Value.LastSeenUtc > PeerTtl)
-            {
-                if (_peers.TryRemove(kv.Key, out var p))
-                {
-                    removed = true;
-                    Log.Write($"[Discovery] peer scaduto: {p.Name} @ {p.Address}");
-                }
+                var ip = res.RemoteEndPoint.Address;
+                if (!_localIps.Contains(ip.ToString()))
+                    _onCandidate(ip);
             }
         }
-        if (removed)
-            PeersChanged?.Invoke();
     }
 
-    // ----- Broadcast targets -----
-
-    private List<IPAddress> BroadcastTargets()
+    private static List<IPAddress> BroadcastTargets()
     {
-        var list = new List<IPAddress> { IPAddress.Broadcast }; // 255.255.255.255
-        foreach (var b in DirectedBroadcasts())
-            if (!list.Contains(b))
-                list.Add(b);
-        return list;
-    }
-
-    private static IEnumerable<IPAddress> DirectedBroadcasts()
-    {
+        var list = new List<IPAddress> { IPAddress.Broadcast };
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
             if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
-
             foreach (var ua in ni.GetIPProperties().UnicastAddresses)
             {
                 if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
                 var mask = ua.IPv4Mask;
                 if (mask == null) continue;
-                var ipBytes = ua.Address.GetAddressBytes();
-                var maskBytes = mask.GetAddressBytes();
-                if (maskBytes.Length != 4 || (maskBytes[0] == 0 && maskBytes[1] == 0)) continue;
-                var bcast = new byte[4];
-                for (var i = 0; i < 4; i++)
-                    bcast[i] = (byte)(ipBytes[i] | (~maskBytes[i] & 0xFF));
-                yield return new IPAddress(bcast);
+                var ip = ua.Address.GetAddressBytes();
+                var mk = mask.GetAddressBytes();
+                if (mk.Length != 4 || (mk[0] == 0 && mk[1] == 0)) continue;
+                var bc = new byte[4];
+                for (var i = 0; i < 4; i++) bc[i] = (byte)(ip[i] | (~mk[i] & 0xFF));
+                var addr = new IPAddress(bc);
+                if (!list.Contains(addr)) list.Add(addr);
             }
         }
+        return list;
     }
 
     private static IEnumerable<string> LocalIPv4()
@@ -298,7 +153,7 @@ public sealed class PeerDiscovery : IDisposable
             if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
             foreach (var ua in ni.GetIPProperties().UnicastAddresses)
                 if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
-                    yield return $"{ua.Address} ({ni.Name})";
+                    yield return ua.Address.ToString();
         }
     }
 

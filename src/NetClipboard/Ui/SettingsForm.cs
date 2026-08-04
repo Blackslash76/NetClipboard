@@ -12,8 +12,6 @@ public sealed class SettingsForm : Form
     private readonly AppConfig _config;
 
     private readonly TextBox _name = new();
-    private readonly TextBox _password = new() { UseSystemPasswordChar = true };
-    private readonly CheckBox _showPassword = new() { Text = "Mostra", AutoSize = true };
     private readonly NumericUpDown _port = new() { Minimum = 1024, Maximum = 65535 };
     private readonly NumericUpDown _historySize = new() { Minimum = 5, Maximum = 200 };
     private readonly NumericUpDown _maxAgeDays = new() { Minimum = 0, Maximum = 3650 };
@@ -55,13 +53,6 @@ public sealed class SettingsForm : Form
         AddLabel("Nome di questo PC", Row());
         _name.SetBounds(180, y - 30, 220, 24);
         Controls.Add(_name);
-
-        AddLabel("Password condivisa", Row());
-        _password.SetBounds(180, y - 30, 150, 24);
-        Controls.Add(_password);
-        _showPassword.SetBounds(336, y - 28, 70, 20);
-        _showPassword.CheckedChanged += (_, _) => _password.UseSystemPasswordChar = !_showPassword.Checked;
-        Controls.Add(_showPassword);
 
         AddLabel("Porta (TCP/UDP)", Row());
         _port.SetBounds(180, y - 30, 100, 24);
@@ -148,7 +139,6 @@ public sealed class SettingsForm : Form
     private void LoadFromConfig()
     {
         _name.Text = _config.DisplayName;
-        _password.Text = _config.Password;
         _port.Value = Math.Clamp(_config.Port, 1024, 65535);
         _historySize.Value = Math.Clamp(_config.HistorySize, 5, 200);
         _maxAgeDays.Value = Math.Clamp(_config.HistoryMaxAgeDays, 0, 3650);
@@ -166,7 +156,6 @@ public sealed class SettingsForm : Form
     private void SaveToConfig()
     {
         _config.DisplayName = string.IsNullOrWhiteSpace(_name.Text) ? Environment.MachineName : _name.Text.Trim();
-        _config.Password = _password.Text;
         _config.Port = (int)_port.Value;
         _config.HistorySize = (int)_historySize.Value;
         _config.HistoryMaxAgeDays = (int)_maxAgeDays.Value;

@@ -7,10 +7,17 @@ Tray app leggera in **C# / WinForms / .NET 9**. Nessun server centrale.
 
 ## Come funziona
 
-- **Scoperta automatica (UDP broadcast)** sulla porta dedicata: i PC si trovano da soli.
-  Gli annunci sono cifrati, quindi ti vedono solo i PC con la **stessa password**.
-- **Trasferimento (TCP)** sulla stessa porta: il contenuto viaggia cifrato **AES-256-GCM**,
-  con chiave derivata dalla passphrase (PBKDF2, 120k iterazioni).
+- **Identità per-dispositivo (niente password)**: ogni PC ha una coppia di chiavi
+  ECDSA P-256 (privata protetta con DPAPI). L'**ID dispositivo** è l'impronta della
+  chiave pubblica. La fiducia si concede una volta con un **pairing a codice** e si può
+  **revocare** per singolo dispositivo. Modello stile Syncthing.
+- **Scoperta** su più livelli (broadcast UDP, scansione di bootstrap, cache, gossip,
+  IP manuali): l'annuncio è in chiaro, l'identità la verifica l'handshake.
+- **Trasferimento (TCP)**: ogni connessione inizia con un **handshake autenticato**
+  (ECDH effimero → forward secrecy) che stabilisce una chiave di sessione e un **codice
+  a 6 cifre**; poi i dati viaggiano cifrati **AES-256-GCM**. Scambio dati solo tra
+  dispositivi **fidati** (chiave pinnata). Il **gossip** tra fidati introduce gli altri
+  → la mesh si forma da sola agganciandone uno.
 - **File e cartelle in "delayed rendering"** (come Windows): copiando file/cartelle si
   condivide solo un *riferimento* (metadati: nomi, dimensioni, struttura). I byte partono
   **solo quando il destinatario incolla/materializza**, in streaming a chunk cifrati
@@ -36,12 +43,22 @@ L'eseguibile è in `src\NetClipboard\bin\Release\net9.0-windows\NetClipboard.exe
 
 ## Primo avvio (su ogni PC)
 
-1. Avvia `NetClipboard.exe` → compare l'icona nel system tray.
-2. Al primo avvio si apre **Impostazioni**: scegli la **stessa password** su tutti i PC.
-3. Se i PC non si vedono, usa **"Configura firewall (admin)"** dal menu tray: crea una
-   regola di eccezione per l'app (una tantum, con UAC). Non aggira il firewall: aggiunge
-   una normale eccezione per l'eseguibile.
-4. (Opzionale) In Impostazioni attiva **"Avvia con Windows"**.
+1. Installa con **NetClipboard-Setup-x.y.z.exe** (installer classico, per-utente) oppure
+   avvia direttamente il single-file `NetClipboard.exe` → icona nel system tray.
+2. Menu tray → **"Configura firewall (admin)"** (una tantum, con UAC) se i PC non si vedono.
+3. **Accoppia i dispositivi**: menu tray → **"Dispositivi e pairing…"**. Sul PC A scegli il
+   PC B dall'elenco "In rete" (o inserisci il suo IP) e premi **Accoppia**. Su **entrambi**
+   compare un **codice a 6 cifre**: confermalo solo se è identico sui due schermi. Da quel
+   momento i due dispositivi sono fidati e condividono la clipboard.
+   - Basta accoppiare un PC alla mesh: gli altri fidati vengono introdotti automaticamente.
+   - Puoi **revocare** un dispositivo in qualsiasi momento dalla stessa finestra.
+
+## Installer
+
+La pipeline di release produce **NetClipboard-Setup-x.y.z.exe** (Inno Setup): installazione
+**per-utente** in `%LocalAppData%\Programs\NetClipboard` (nessun admin), collegamenti nel
+menu Start, opzioni "avvia con Windows" e icona sul desktop, e disinstallazione pulita.
+L'installazione per-utente permette all'auto-update di sostituire l'eseguibile senza UAC.
 
 ## Menu tray
 
@@ -49,7 +66,8 @@ L'eseguibile è in `src\NetClipboard\bin\Release\net9.0-windows\NetClipboard.exe
 - **Apri cronologia (Ctrl+Alt+V)** — popup della history cross-device.
 - **Invia clipboard ora** — invio manuale on-demand ai peer.
 - **Dispositivi** — elenco dei PC in linea.
-- **Impostazioni…** — password, porta, dimensione cronologia, limite MB, tipi condivisi.
+- **Dispositivi e pairing…** — accoppia (codice), revoca, vedi l'impronta di questo PC.
+- **Impostazioni…** — nome PC, porta, cronologia (numero/età), limite MB, tipi condivisi, aggiornamenti.
 - **Configura firewall (admin)** / **Esci**.
 
 ## Aggiornamenti automatici (GitHub Releases, firmati)
@@ -83,7 +101,8 @@ I client vedono la nuova versione entro poche ore (o subito con "Controlla aggio
 ## Dove sono i dati
 
 `%AppData%\NetClipboard\`
-- `config.json` — configurazione (la password è protetta con DPAPI, mai in chiaro).
+- `config.json` — configurazione. `identity.key` — chiave privata del dispositivo (DPAPI).
+  `trusted.json` — dispositivi fidati (chiavi pubbliche pinnate).
 - `history\` — indice cronologia + immagini.
 - `received\` — file ricevuti dai peer.
 
@@ -128,7 +147,9 @@ incollare** con un normale Ctrl+V in Esplora file. Se l'host è offline compare 
 ```
 src/NetClipboard/
 ├─ Program.cs                entry, single-instance, --install-firewall
-├─ AppConfig.cs              config JSON + password DPAPI
+├─ AppConfig.cs              config JSON
+├─ Core/Security/            identità (ECDSA), handshake+SAS, sessione, trust store
+├─ Update/Updater.cs         auto-update firmato
 ├─ Core/
 │  ├─ SecureChannel.cs       AES-256-GCM + PBKDF2
 │  ├─ ClipboardPayload.cs    modello + (de)serializzazione binaria

@@ -38,6 +38,10 @@ public sealed class ClipboardMonitor : Form
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private readonly AppConfig _config;
+
+    /// <summary>DeviceId da usare come proprietario delle offerte file (impostato dal TrayContext).</summary>
+    public string OwnerDeviceId = "";
+
     private string? _suppressHash;
     private DateTime _suppressUntilUtc = DateTime.MinValue;
     private bool _listenerAdded;
@@ -123,7 +127,7 @@ public sealed class ClipboardMonitor : Form
                 if (paths.Count > 0)
                 {
                     // Solo metadati (offer): i byte partono su richiesta.
-                    var offer = FileOffer.FromPaths(paths, _config.InstanceId, _config.DisplayName);
+                    var offer = FileOffer.FromPaths(paths, OwnerDeviceId, _config.DisplayName);
                     if (offer != null)
                         return ClipboardPayload.FromOffer(offer);
                     return null;
