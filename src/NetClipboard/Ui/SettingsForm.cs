@@ -22,7 +22,7 @@ public sealed class SettingsForm : Form
     private readonly CheckBox _autostart = new() { Text = "Avvia con Windows", AutoSize = true };
     private readonly CheckBox _autoScan = new() { Text = "Scoperta automatica (scansione rete)", AutoSize = true };
     private readonly CheckBox _autoUpdate = new() { Text = "Controlla aggiornamenti", AutoSize = true };
-    private readonly TextBox _updateUrl = new();
+    private readonly TextBox _updateUrl = new() { PlaceholderText = "predefinito (già incluso) · lascia vuoto" };
     private readonly TextBox _manualPeers = new() { Multiline = true, ScrollBars = ScrollBars.Vertical };
     private readonly Label _firewall = new() { AutoSize = true };
 
@@ -87,7 +87,7 @@ public sealed class SettingsForm : Form
         _autoUpdate.Left = 180; _autoUpdate.Top = y; y += 30;
         Controls.Add(_autoUpdate);
 
-        AddLabel("URL aggiornamenti", Row());
+        AddLabel("URL update (opz.)", Row());
         _updateUrl.SetBounds(180, y - 30, 224, 24);
         Controls.Add(_updateUrl);
 

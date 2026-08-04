@@ -29,6 +29,10 @@ public static class Updater
     public const string ReleasePublicKeyB64 =
         "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7YXqpiZAZ7RDgDKU+UQTyPeOVJAV0K4wb92/+FM0DSwYc/0anghtENqz9/fCTGPYqLWaDRA/L7/O/bmhnhaQeQ==";
 
+    /// <summary>URL del manifest fissato nell'eseguibile (usato se non c'è un override in Impostazioni).</summary>
+    public const string DefaultManifestUrl =
+        "https://github.com/Blackslash76/NetClipboard/releases/latest/download/manifest.json";
+
     private const string SigContext = "netclip-update-v1";
 
     private static readonly HttpClient Http = CreateHttp();

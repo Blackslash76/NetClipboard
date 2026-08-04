@@ -34,6 +34,10 @@ public sealed class HistoryForm : Form
     private Font _fTitle = null!, _fSub = null!, _fHint = null!, _fFooter = null!,
                  _fPreview = null!, _fMeta = null!, _fBadge = null!;
 
+    private IntPtr _target;
+    /// <summary>Finestra che aveva il fuoco quando si è aperto il popup (per incollarci).</summary>
+    public IntPtr TargetWindow => _target;
+
     public event Action<HistoryItem>? ItemChosen;
 
     public HistoryForm(ClipboardHistory history)
@@ -57,7 +61,6 @@ public sealed class HistoryForm : Form
             IntegralHeight = false,
         };
         _list.DrawItem += OnDrawItem;
-        _list.DoubleClick += (_, _) => ChooseSelected();
         _list.KeyDown += OnKeyDown;
         _list.MouseUp += OnMouseUp;
         Controls.Add(_list);
@@ -115,6 +118,7 @@ public sealed class HistoryForm : Form
 
     public void ShowNearCursor()
     {
+        _target = NativePaste.GetForegroundWindow(); // la finestra dove incollare
         _ = Handle;      // forza la creazione dell'handle (per avere il DPI)
         ApplyScale();
         _history.PurgeExpired();
@@ -167,6 +171,12 @@ public sealed class HistoryForm : Form
 
     private void OnMouseUp(object? sender, MouseEventArgs e)
     {
+        if (e.Button == MouseButtons.Left)
+        {
+            var i = _list.IndexFromPoint(e.Location);
+            if (i >= 0) { _list.SelectedIndex = i; ChooseSelected(); } // singolo click = incolla
+            return;
+        }
         if (e.Button != MouseButtons.Right) return;
         var idx = _list.IndexFromPoint(e.Location);
         if (idx < 0) return;

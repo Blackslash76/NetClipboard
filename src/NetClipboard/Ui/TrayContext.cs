@@ -168,24 +168,39 @@ public sealed class TrayContext : ApplicationContext
 
     private void OnHistoryItemChosen(HistoryItem item)
     {
+        var target = _historyForm.TargetWindow;
         if (item.Kind != PayloadKind.Files)
         {
             var payload = _history.ToPayload(item);
-            if (payload != null) _monitor.BeginInvoke(() => _monitor.ApplyToClipboard(payload));
-            else Balloon("NetClipboard", "Contenuto non più disponibile.", ToolTipIcon.Warning);
+            if (payload == null) { Balloon("NetClipboard", "Contenuto non più disponibile.", ToolTipIcon.Warning); return; }
+            _monitor.BeginInvoke(() => { _monitor.ApplyToClipboard(payload); PasteToTarget(target); });
             return;
         }
-        _ = Task.Run(() => MaterializeAsync(item));
+        _ = Task.Run(() => MaterializeAsync(item, target));
     }
 
-    private async Task MaterializeAsync(HistoryItem item)
+    /// <summary>Riporta il fuoco alla finestra di origine e simula Ctrl+V (come Win+V).</summary>
+    private static void PasteToTarget(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(130);
+            NativePaste.SetForegroundWindow(hwnd);
+            await Task.Delay(50);
+            NativePaste.SendCtrlV();
+        });
+    }
+
+    private async Task MaterializeAsync(HistoryItem item, IntPtr target)
     {
         try
         {
             if (item.LocalRootPaths is { Count: > 0 } && item.LocalRootPaths.All(Exists))
             {
                 ApplyFiles(item.LocalRootPaths);
-                Balloon("NetClipboard", "Pronto da incollare.");
+                PasteToTarget(target);
+                Balloon("NetClipboard", "Incollato.");
                 return;
             }
             if (item.IsLocalOffer) { Balloon("NetClipboard", "I file originali non sono più disponibili.", ToolTipIcon.Warning); return; }
@@ -202,7 +217,8 @@ public sealed class TrayContext : ApplicationContext
 
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
-            Balloon("NetClipboard", $"Pronto da incollare · {roots.Count} elemento/i.");
+            PasteToTarget(target);
+            Balloon("NetClipboard", $"Incollato · {roots.Count} elemento/i.");
         }
         catch (Exception ex)
         {
@@ -318,17 +334,21 @@ public sealed class TrayContext : ApplicationContext
 
     // ----- Auto-update -----
 
+    /// <summary>URL aggiornamenti: override in Impostazioni, altrimenti quello fissato nell'exe.</summary>
+    private string UpdateUrl => string.IsNullOrWhiteSpace(_config.UpdateManifestUrl)
+        ? Updater.DefaultManifestUrl : _config.UpdateManifestUrl;
+
     private void StartUpdateChecks()
     {
-        if (!_config.AutoUpdateCheck || !Updater.IsConfigured(_config.UpdateManifestUrl)) return;
+        if (!_config.AutoUpdateCheck || !Updater.IsConfigured(UpdateUrl)) return;
         _updateTimer = new System.Threading.Timer(_ => _ = CheckForUpdateAsync(false), null,
             TimeSpan.FromSeconds(8), TimeSpan.FromHours(6));
     }
 
     private async Task CheckForUpdateAsync(bool manual)
     {
-        var url = _config.UpdateManifestUrl;
-        if (!Updater.IsConfigured(url)) { if (manual) Balloon("Aggiornamenti", "Non configurati: imposta l'URL in Impostazioni.", ToolTipIcon.Info); return; }
+        var url = UpdateUrl;
+        if (!Updater.IsConfigured(url)) { if (manual) Balloon("Aggiornamenti", "Non configurati.", ToolTipIcon.Info); return; }
         if (manual) Balloon("Aggiornamenti", "Controllo in corso…");
         var info = await Updater.CheckAsync(url, CancellationToken.None);
         if (info == null) { if (manual) Balloon("Aggiornamenti", "Nessun aggiornamento disponibile."); return; }
