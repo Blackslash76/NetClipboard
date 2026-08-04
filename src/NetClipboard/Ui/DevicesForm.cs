@@ -1,4 +1,5 @@
 using System.Net;
+using NetClipboard.Core;
 using NetClipboard.Core.Security;
 using NetClipboard.Net;
 
@@ -91,28 +92,50 @@ public sealed class DevicesForm : Form
 
     private void RefreshLists()
     {
-        // Fidati
-        _trusted.BeginUpdate();
-        _trusted.Items.Clear();
-        foreach (var d in _trust.All)
-        {
-            var it = new ListViewItem(d.Name) { Tag = d.DeviceId };
-            it.SubItems.Add(DeviceIdentity.ShortFingerprint(d.DeviceId));
-            _trusted.Items.Add(it);
-        }
-        _trusted.EndUpdate();
+        UpdateList(_trusted, _trust.All
+            .Select(d => (Key: d.DeviceId, C1: d.Name, C2: DeviceIdentity.ShortFingerprint(d.DeviceId), Tag: (object)d.DeviceId))
+            .ToList());
 
-        // Scoperti non fidati
-        _discovered.BeginUpdate();
-        _discovered.Items.Clear();
-        foreach (var p in _transport.Peers.Where(p => !p.Trusted))
-        {
-            var it = new ListViewItem(p.Name) { Tag = p };
-            it.SubItems.Add(p.Address.ToString());
-            _discovered.Items.Add(it);
-        }
-        _discovered.EndUpdate();
+        UpdateList(_discovered, _transport.Peers.Where(p => !p.Trusted)
+            .Select(p => (Key: p.DeviceId, C1: p.Name, C2: p.Address.ToString(), Tag: (object)p))
+            .ToList());
     }
+
+    /// <summary>Aggiorna la ListView SENZA perdere la selezione: ricostruisce solo se il set cambia.</summary>
+    private static void UpdateList(ListView lv, List<(string Key, string C1, string C2, object Tag)> items)
+    {
+        var existing = lv.Items.Cast<ListViewItem>().Select(KeyOf).ToList();
+        var newKeys = items.Select(i => i.Key).ToList();
+
+        if (existing.SequenceEqual(newKeys))
+        {
+            // stesso insieme: aggiorna solo i testi, la selezione resta intatta
+            for (var k = 0; k < items.Count; k++)
+            {
+                lv.Items[k].Text = items[k].C1;
+                lv.Items[k].SubItems[1].Text = items[k].C2;
+                lv.Items[k].Tag = items[k].Tag;
+            }
+            return;
+        }
+
+        var selKey = lv.SelectedItems.Count > 0 ? KeyOf(lv.SelectedItems[0]) : null;
+        lv.BeginUpdate();
+        lv.Items.Clear();
+        foreach (var it in items)
+        {
+            var lvi = new ListViewItem(it.C1) { Tag = it.Tag };
+            lvi.SubItems.Add(it.C2);
+            lv.Items.Add(lvi);
+        }
+        lv.EndUpdate();
+
+        if (selKey != null)
+            foreach (ListViewItem lvi in lv.Items)
+                if (KeyOf(lvi) == selKey) { lvi.Selected = true; lvi.Focused = true; break; }
+    }
+
+    private static string KeyOf(ListViewItem i) => i.Tag is Peer p ? p.DeviceId : (string)i.Tag!;
 
     private void RevokeSelected()
     {
@@ -129,7 +152,12 @@ public sealed class DevicesForm : Form
 
     private void PairSelected()
     {
-        if (_discovered.SelectedItems.Count == 0) return;
+        if (_discovered.SelectedItems.Count == 0)
+        {
+            MessageBox.Show("Seleziona prima un dispositivo dall'elenco \"In rete\".",
+                "Pairing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         var peer = (Peer)_discovered.SelectedItems[0].Tag!;
         StartPairing(peer.Address, peer.Port, peer.Name);
     }
@@ -146,11 +174,17 @@ public sealed class DevicesForm : Form
 
     private async void StartPairing(IPAddress ip, int port, string name)
     {
-        if (_busy) return;
+        if (_busy)
+        {
+            MessageBox.Show("Un pairing è già in corso.", "Pairing", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         _busy = true;
+        Log.Write($"[Pairing] avvio verso {name} @ {ip}:{port}");
         try
         {
             var (outcome, resolved) = await _transport.PairAsync(ip, port, name, CancellationToken.None);
+            Log.Write($"[Pairing] esito verso {name}: {outcome}");
             RefreshLists();
             var msg = outcome switch
             {

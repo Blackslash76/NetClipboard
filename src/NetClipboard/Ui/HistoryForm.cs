@@ -5,28 +5,34 @@ using NetClipboard.Core;
 namespace NetClipboard.Ui;
 
 /// <summary>
-/// Popup della cronologia condivisa (il "nostro Win+V" cross-device), con una
-/// grafica curata: angoli arrotondati, ombra, header con gradiente e badge
-/// colorati per tipo. Si apre con Win+Alt+V vicino al cursore.
+/// Popup della cronologia condivisa (il "nostro Win+V" cross-device).
+/// Interamente DPI-aware: ogni misura e ogni font vengono scalati in base al
+/// DPI del monitor, così il testo non viene tagliato con lo scaling di Windows
+/// (125% / 150% ecc.).
 /// </summary>
 public sealed class HistoryForm : Form
 {
-    // Palette
     private static readonly Color Bg = Color.FromArgb(24, 24, 30);
     private static readonly Color Card = Color.FromArgb(32, 32, 40);
     private static readonly Color TextMain = Color.FromArgb(238, 238, 244);
     private static readonly Color TextMuted = Color.FromArgb(150, 152, 165);
-    private static readonly Color AccentA = Color.FromArgb(120, 92, 245); // viola
-    private static readonly Color AccentB = Color.FromArgb(56, 180, 220);  // ciano
+    private static readonly Color AccentA = Color.FromArgb(120, 92, 245);
+    private static readonly Color AccentB = Color.FromArgb(56, 180, 220);
     private static readonly Color SelBg = Color.FromArgb(52, 50, 74);
 
-    private const int HeaderH = 60;
-    private const int FooterH = 26;
+    // Misure logiche (a 96 DPI); vengono scalate da _scale.
+    private const int HeaderH = 62;
+    private const int FooterH = 28;
     private const int Radius = 16;
+    private const int RowH = 62;
 
     private readonly ClipboardHistory _history;
     private readonly BufferedListBox _list;
     private readonly Dictionary<string, Image> _thumbCache = new();
+
+    private float _scale = 1f;
+    private Font _fTitle = null!, _fSub = null!, _fHint = null!, _fFooter = null!,
+                 _fPreview = null!, _fMeta = null!, _fBadge = null!;
 
     public event Action<HistoryItem>? ItemChosen;
 
@@ -34,24 +40,22 @@ public sealed class HistoryForm : Form
     {
         _history = history;
 
+        AutoScaleMode = AutoScaleMode.None; // scaliamo noi, manualmente
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
         DoubleBuffered = true;
-        Size = new Size(440, 520);
         BackColor = Bg;
 
         _list = new BufferedListBox
         {
             DrawMode = DrawMode.OwnerDrawFixed,
-            ItemHeight = 60,
             BorderStyle = BorderStyle.None,
             BackColor = Bg,
             ForeColor = TextMain,
             IntegralHeight = false,
         };
-        _list.SetBounds(8, HeaderH, Width - 16, Height - HeaderH - FooterH);
         _list.DrawItem += OnDrawItem;
         _list.DoubleClick += (_, _) => ChooseSelected();
         _list.KeyDown += OnKeyDown;
@@ -62,32 +66,60 @@ public sealed class HistoryForm : Form
         Paint += OnPaintChrome;
     }
 
+    private int P(double v) => (int)Math.Round(v * _scale);
+
     protected override CreateParams CreateParams
     {
-        get
-        {
-            var cp = base.CreateParams;
-            cp.ClassStyle |= 0x00020000; // CS_DROPSHADOW: ombra leggera
-            return cp;
-        }
+        get { var cp = base.CreateParams; cp.ClassStyle |= 0x00020000; return cp; } // ombra
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        ApplyRoundedRegion();
+        ApplyScale();
     }
 
-    private void ApplyRoundedRegion()
+    private void ApplyScale()
     {
-        using var path = RoundedRect(new Rectangle(0, 0, Width, Height), Radius);
+        var scale = DeviceDpi / 96f;
+        if (Math.Abs(scale - _scale) < 0.01f && _fTitle != null)
+        {
+            ApplyLayout();
+            return;
+        }
+        _scale = scale;
+
+        DisposeFonts();
+        _fTitle = PxFont("Segoe UI Semibold", 15.5f);
+        _fSub = PxFont("Segoe UI", 11f);
+        _fHint = PxFont("Segoe UI", 10.5f);
+        _fFooter = PxFont("Segoe UI", 10f, FontStyle.Italic);
+        _fPreview = PxFont("Segoe UI", 13f);
+        _fMeta = PxFont("Segoe UI", 10.5f);
+        _fBadge = PxFont("Segoe UI", 16.5f, FontStyle.Bold);
+
+        ApplyLayout();
+    }
+
+    private Font PxFont(string family, float px, FontStyle style = FontStyle.Regular) =>
+        new(family, px * _scale, style, GraphicsUnit.Pixel);
+
+    private void ApplyLayout()
+    {
+        Size = new Size(P(440), P(520));
+        _list.ItemHeight = P(RowH);
+        _list.SetBounds(P(8), P(HeaderH), Width - P(16), Height - P(HeaderH) - P(FooterH));
+        using var path = RoundedRect(new Rectangle(0, 0, Width, Height), P(Radius));
         Region = new Region(path);
     }
 
     public void ShowNearCursor()
     {
+        _ = Handle;      // forza la creazione dell'handle (per avere il DPI)
+        ApplyScale();
         _history.PurgeExpired();
         Reload();
+
         var pos = Cursor.Position;
         var screen = Screen.FromPoint(pos).WorkingArea;
         var x = Math.Clamp(pos.X, screen.Left + 8, screen.Right - Width - 8);
@@ -125,98 +157,61 @@ public sealed class HistoryForm : Form
     {
         switch (e.KeyCode)
         {
-            case Keys.Enter:
-                ChooseSelected();
-                e.Handled = true;
-                break;
-            case Keys.Escape:
-                Hide();
-                e.Handled = true;
-                break;
+            case Keys.Enter: ChooseSelected(); e.Handled = true; break;
+            case Keys.Escape: Hide(); e.Handled = true; break;
             case Keys.Delete:
-                if (_list.SelectedItem is HistoryItem del)
-                {
-                    _history.Remove(del.Id);
-                    Reload();
-                }
-                e.Handled = true;
-                break;
+                if (_list.SelectedItem is HistoryItem del) { _history.Remove(del.Id); Reload(); }
+                e.Handled = true; break;
         }
     }
 
     private void OnMouseUp(object? sender, MouseEventArgs e)
     {
-        if (e.Button != MouseButtons.Right)
-            return;
+        if (e.Button != MouseButtons.Right) return;
         var idx = _list.IndexFromPoint(e.Location);
-        if (idx < 0)
-            return;
+        if (idx < 0) return;
         _list.SelectedIndex = idx;
-        if (_list.SelectedItem is not HistoryItem item)
-            return;
+        if (_list.SelectedItem is not HistoryItem item) return;
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add(item.Pinned ? "Rimuovi pin" : "Aggiungi pin", null, (_, _) =>
-        {
-            _history.TogglePin(item.Id);
-            Reload();
-        });
-        menu.Items.Add("Elimina", null, (_, _) =>
-        {
-            _history.Remove(item.Id);
-            Reload();
-        });
+        menu.Items.Add(item.Pinned ? "Rimuovi pin" : "Aggiungi pin", null, (_, _) => { _history.TogglePin(item.Id); Reload(); });
+        menu.Items.Add("Elimina", null, (_, _) => { _history.Remove(item.Id); Reload(); });
         menu.Show(_list, e.Location);
     }
-
-    // ----- Chrome: header con gradiente + footer con firma -----
 
     private void OnPaintChrome(object? sender, PaintEventArgs e)
     {
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        // Sfondo header con gradiente
-        var headerRect = new Rectangle(0, 0, Width, HeaderH);
+        var headerRect = new Rectangle(0, 0, Width, P(HeaderH));
         using (var grad = new LinearGradientBrush(headerRect, AccentA, AccentB, LinearGradientMode.Horizontal))
             g.FillRectangle(grad, headerRect);
 
-        // Piccolo "logo" clipboard
         using (var chip = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
-        {
-            g.FillRoundedRect(chip, new Rectangle(16, 16, 26, 28), 6);
-        }
+            g.FillRoundedRect(chip, new Rectangle(P(16), P(16), P(26), P(28)), P(6));
         using (var clipTop = new SolidBrush(AccentA))
-            g.FillRoundedRect(clipTop, new Rectangle(24, 12, 10, 8), 3);
+            g.FillRoundedRect(clipTop, new Rectangle(P(24), P(12), P(10), P(8)), P(3));
 
-        TextRenderer.DrawText(g, "NetClipboard", new Font("Segoe UI Semibold", 12f),
-            new Point(54, 12), Color.White, Color.Transparent);
-        TextRenderer.DrawText(g, "Appunti condivisi tra i tuoi dispositivi", new Font("Segoe UI", 8.25f),
-            new Point(55, 34), Color.FromArgb(230, 240, 245), Color.Transparent);
-
-        // Hint a destra
-        TextRenderer.DrawText(g, "Invio incolla · Esc chiude", new Font("Segoe UI", 8f),
-            new Rectangle(Width - 210, 22, 194, 18), Color.FromArgb(235, 245, 250),
+        TextRenderer.DrawText(g, "NetClipboard", _fTitle, new Point(P(54), P(11)), Color.White, Color.Transparent);
+        TextRenderer.DrawText(g, "Appunti condivisi tra i tuoi dispositivi", _fSub,
+            new Point(P(55), P(34)), Color.FromArgb(232, 242, 247), Color.Transparent);
+        TextRenderer.DrawText(g, "Invio incolla · Esc chiude", _fHint,
+            new Rectangle(Width - P(200), P(21), P(190), P(20)), Color.FromArgb(235, 245, 250),
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
 
-        // Footer + firma (discreta ma sempre presente)
-        var footRect = new Rectangle(0, Height - FooterH, Width, FooterH);
+        var footRect = new Rectangle(0, Height - P(FooterH), Width, P(FooterH));
         using (var fb = new SolidBrush(Color.FromArgb(18, 18, 22)))
             g.FillRectangle(fb, footRect);
         using (var line = new Pen(Color.FromArgb(45, 45, 55)))
             g.DrawLine(line, 0, footRect.Top, Width, footRect.Top);
-        TextRenderer.DrawText(g, "creato da Francesco Papeo",
-            new Font("Segoe UI", 7.75f, FontStyle.Italic),
-            footRect, Color.FromArgb(110, 112, 125),
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(g, "creato da Francesco Papeo", _fFooter, footRect,
+            Color.FromArgb(115, 117, 130), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     }
-
-    // ----- Disegno voci -----
 
     private void OnDrawItem(object? sender, DrawItemEventArgs e)
     {
-        if (e.Index < 0 || _list.Items[e.Index] is not HistoryItem item)
-            return;
+        if (e.Index < 0 || _list.Items[e.Index] is not HistoryItem item) return;
 
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -225,21 +220,20 @@ public sealed class HistoryForm : Form
         using (var bg = new SolidBrush(Bg))
             g.FillRectangle(bg, e.Bounds);
 
-        // Riga con angoli arrotondati
-        var row = new Rectangle(e.Bounds.Left + 6, e.Bounds.Top + 4, e.Bounds.Width - 12, e.Bounds.Height - 8);
+        var row = new Rectangle(e.Bounds.Left + P(6), e.Bounds.Top + P(4), e.Bounds.Width - P(12), e.Bounds.Height - P(8));
         using (var rb = new SolidBrush(selected ? SelBg : Card))
-            g.FillRoundedRect(rb, row, 10);
+            g.FillRoundedRect(rb, row, P(10));
         if (selected)
             using (var accent = new SolidBrush(AccentA))
-                g.FillRoundedRect(accent, new Rectangle(row.Left, row.Top + 6, 3, row.Height - 12), 2);
+                g.FillRoundedRect(accent, new Rectangle(row.Left, row.Top + P(6), P(3), row.Height - P(12)), P(2));
 
-        // Icona / thumbnail (40x40)
-        var icon = new Rectangle(row.Left + 12, row.Top + (row.Height - 40) / 2, 40, 40);
-        var thumb = GetThumb(item);
+        var iconSz = P(40);
+        var icon = new Rectangle(row.Left + P(12), row.Top + (row.Height - iconSz) / 2, iconSz, iconSz);
+        var thumb = GetThumb(item, iconSz);
         if (thumb != null)
         {
             using var clip = new GraphicsPath();
-            clip.AddRoundedRectangle(icon, 8);
+            clip.AddRoundedRectangle(icon, P(8));
             var saved = g.Clip;
             g.SetClip(clip, CombineMode.Replace);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -250,62 +244,54 @@ public sealed class HistoryForm : Form
         {
             var (c1, c2, glyph) = BadgeStyle(item);
             using (var grad = new LinearGradientBrush(icon, c1, c2, LinearGradientMode.ForwardDiagonal))
-                g.FillRoundedRect(grad, icon, 8);
-            TextRenderer.DrawText(g, glyph, new Font("Segoe UI", 13f, FontStyle.Bold),
-                icon, Color.White, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                g.FillRoundedRect(grad, icon, P(8));
+            TextRenderer.DrawText(g, glyph, _fBadge, icon, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
-        var textLeft = icon.Right + 12;
-        var textWidth = row.Right - textLeft - 12;
+        var textLeft = icon.Right + P(12);
+        var textWidth = row.Right - textLeft - P(12);
 
-        TextRenderer.DrawText(g, item.Preview, new Font("Segoe UI", 9.75f),
-            new Rectangle(textLeft, row.Top + 9, textWidth, 20), TextMain,
-            TextFormatFlags.EndEllipsis | TextFormatFlags.Left);
+        TextRenderer.DrawText(g, item.Preview, _fPreview,
+            new Rectangle(textLeft, row.Top + P(9), textWidth, P(22)), TextMain,
+            TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
 
         var pin = item.Pinned ? "📌 " : "";
         var toFetch = item.Kind == PayloadKind.Files && !item.IsLocalOffer
-            && (item.LocalRootPaths == null || item.LocalRootPaths.Count == 0)
-            ? "  ·  da scaricare" : "";
+            && (item.LocalRootPaths == null || item.LocalRootPaths.Count == 0) ? "  ·  da scaricare" : "";
         var meta = $"{pin}{(item.IsLocal ? "questo PC" : item.Origin)}  ·  {LocalTime(item.TimestampUtc)}{toFetch}";
-        TextRenderer.DrawText(g, meta, new Font("Segoe UI", 8f),
-            new Rectangle(textLeft, row.Top + 31, textWidth, 18), TextMuted,
-            TextFormatFlags.EndEllipsis | TextFormatFlags.Left);
+        TextRenderer.DrawText(g, meta, _fMeta,
+            new Rectangle(textLeft, row.Top + P(33), textWidth, P(20)), TextMuted,
+            TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
     }
 
     private static (Color, Color, string) BadgeStyle(HistoryItem item) => item.Kind switch
     {
         PayloadKind.Text => (Color.FromArgb(70, 120, 235), Color.FromArgb(60, 90, 200), "T"),
-        PayloadKind.Files => item.DirCount > 0
-            ? (Color.FromArgb(240, 170, 60), Color.FromArgb(220, 130, 40), "🗀")
-            : (Color.FromArgb(240, 170, 60), Color.FromArgb(220, 130, 40), "🗎"),
+        PayloadKind.Files => (Color.FromArgb(240, 170, 60), Color.FromArgb(220, 130, 40), item.DirCount > 0 ? "🗀" : "🗎"),
         _ => (Color.FromArgb(60, 170, 120), Color.FromArgb(40, 140, 100), "?"),
     };
 
-    private Image? GetThumb(HistoryItem item)
+    private Image? GetThumb(HistoryItem item, int size)
     {
-        if (item.Kind != PayloadKind.Image || item.BlobFile == null)
-            return null;
-        if (_thumbCache.TryGetValue(item.Id, out var cached))
-            return cached;
+        if (item.Kind != PayloadKind.Image || item.BlobFile == null) return null;
+        var key = item.Id + "@" + size;
+        if (_thumbCache.TryGetValue(key, out var cached)) return cached;
         try
         {
             var path = Path.Combine(AppConfig.AppDataDir, "history", item.BlobFile);
-            if (!File.Exists(path))
-                return null;
+            if (!File.Exists(path)) return null;
             using var src = Image.FromFile(path);
-            var thumb = new Bitmap(40, 40);
+            var thumb = new Bitmap(size, size);
             using (var g = Graphics.FromImage(thumb))
             {
                 g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.DrawImage(src, 0, 0, 40, 40);
+                g.DrawImage(src, 0, 0, size, size);
             }
-            _thumbCache[item.Id] = thumb;
+            _thumbCache[key] = thumb;
             return thumb;
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
     }
 
     private static string LocalTime(DateTime utc)
@@ -320,7 +306,7 @@ public sealed class HistoryForm : Form
 
     private static GraphicsPath RoundedRect(Rectangle r, int radius)
     {
-        var d = radius * 2;
+        var d = Math.Max(1, radius * 2);
         var path = new GraphicsPath();
         path.AddArc(r.X, r.Y, d, d, 180, 90);
         path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
@@ -330,17 +316,18 @@ public sealed class HistoryForm : Form
         return path;
     }
 
+    private void DisposeFonts()
+    {
+        _fTitle?.Dispose(); _fSub?.Dispose(); _fHint?.Dispose(); _fFooter?.Dispose();
+        _fPreview?.Dispose(); _fMeta?.Dispose(); _fBadge?.Dispose();
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (e.CloseReason == CloseReason.UserClosing)
-        {
-            e.Cancel = true;
-            Hide();
-        }
+        if (e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); }
         base.OnFormClosing(e);
     }
 
-    /// <summary>ListBox con doppio buffer per un disegno fluido e senza sfarfallio.</summary>
     private sealed class BufferedListBox : ListBox
     {
         public BufferedListBox()
@@ -351,7 +338,6 @@ public sealed class HistoryForm : Form
     }
 }
 
-/// <summary>Helper di disegno arrotondato riusabili.</summary>
 internal static class GraphicsRoundedExtensions
 {
     public static void FillRoundedRect(this Graphics g, Brush brush, Rectangle r, int radius)
@@ -363,7 +349,7 @@ internal static class GraphicsRoundedExtensions
 
     public static void AddRoundedRectangle(this GraphicsPath path, Rectangle r, int radius)
     {
-        var d = radius * 2;
+        var d = Math.Max(1, radius * 2);
         path.AddArc(r.X, r.Y, d, d, 180, 90);
         path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
         path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
