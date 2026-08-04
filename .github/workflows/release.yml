@@ -1,0 +1,74 @@
+name: Release (gold)
+
+# Pubblica una nuova "gold": al push di un tag vX.Y.Z costruisce il single-file,
+# lo FIRMA con la chiave privata release (secret RELEASE_SIGNING_KEY_B64), genera
+# manifest.json e crea la GitHub Release con entrambi gli asset.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  gold:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Versione dal tag
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Versione: $v"
+
+      - name: Publish single-file self-contained
+        shell: pwsh
+        run: >
+          dotnet publish src/NetClipboard/NetClipboard.csproj -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:Version=${{ steps.ver.outputs.version }}
+          -p:AssemblyVersion=${{ steps.ver.outputs.version }}
+          -p:FileVersion=${{ steps.ver.outputs.version }}
+          -o publish
+
+      - name: Firma e genera manifest.json
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY_B64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY)) {
+            throw "Manca il secret RELEASE_SIGNING_KEY_B64 (contenuto di .vault/release-signing.key)."
+          }
+          Set-Content -Path key.b64 -Value $env:SIGNING_KEY -NoNewline
+          $exeUrl = "https://github.com/${{ github.repository }}/releases/latest/download/NetClipboard.exe"
+          Start-Process -FilePath publish/NetClipboard.exe -Wait -NoNewWindow -ArgumentList @(
+            '--sign-release','publish/NetClipboard.exe','${{ steps.ver.outputs.version }}',
+            'key.b64', $exeUrl, 'manifest.json', "Release ${{ github.ref_name }}"
+          )
+          Remove-Item key.b64 -Force
+          if (-not (Test-Path manifest.json)) {
+            if (Test-Path sign-error.txt) { Get-Content sign-error.txt }
+            throw "manifest.json non generato: firma fallita."
+          }
+          Get-Content manifest.json
+
+      - name: Crea GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: NetClipboard ${{ github.ref_name }}
+          files: |
+            publish/NetClipboard.exe
+            manifest.json
+          make_latest: true
+          generate_release_notes: true

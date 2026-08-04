@@ -1,0 +1,16 @@
+# Segreti — MAI condividere / committare
+.vault/
+*.key
+*.pfx
+release-signing.key
+
+# Build
+bin/
+obj/
+[Rr]elease/
+[Dd]ebug/
+*.user
+
+# IDE
+.vs/
+.idea/

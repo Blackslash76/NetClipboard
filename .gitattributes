@@ -1,0 +1,8 @@
+* text=auto
+*.cs   text
+*.md   text
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sln  text
+*.slnx text
+*.csproj text
