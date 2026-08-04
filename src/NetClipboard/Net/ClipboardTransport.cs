@@ -16,6 +16,9 @@ public sealed record PairingPrompt(string Sas, string PeerName, string Fingerpri
 
 public enum PairOutcome { Paired, Rejected, Failed }
 
+/// <summary>Avanzamento del download dei file (delayed rendering).</summary>
+public sealed record FetchProgress(string CurrentName, long BytesDone, int FilesDone);
+
 /// <summary>
 /// Trasporto TCP sicuro. OGNI connessione inizia con un handshake autenticato
 /// (identità per-dispositivo, forward secrecy) che stabilisce una chiave di
@@ -338,7 +341,8 @@ public sealed class ClipboardTransport : IDisposable
 
     // ===================== FETCH (file on-demand) =====================
 
-    public async Task<List<string>> FetchAsync(Peer owner, Guid offerId, string destDir, CancellationToken ct)
+    public async Task<List<string>> FetchAsync(Peer owner, Guid offerId, string destDir, CancellationToken ct,
+        IProgress<FetchProgress>? progress = null)
     {
         Directory.CreateDirectory(destDir);
         using var client = new TcpClient();
@@ -356,6 +360,10 @@ public sealed class ClipboardTransport : IDisposable
 
         var topNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         FileStream? current = null;
+        var doneBytes = 0L;
+        var doneFiles = 0;
+        var currentName = "";
+        var lastReport = 0L;
         try
         {
             while (true)
@@ -378,13 +386,31 @@ public sealed class ClipboardTransport : IDisposable
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                         current = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None);
+                        currentName = rel;
+                        progress?.Report(new FetchProgress(currentName, doneBytes, doneFiles));
                     }
                 }
-                else if (t == FData && current != null) await current.WriteAsync(plain.AsMemory(1), ct);
-                else if (t == FEntryEnd) { current?.Dispose(); current = null; }
+                else if (t == FData && current != null)
+                {
+                    await current.WriteAsync(plain.AsMemory(1), ct);
+                    doneBytes += plain.Length - 1;
+                    // niente report a raffica: al massimo ~10 al secondo
+                    var now = Environment.TickCount64;
+                    if (progress != null && now - lastReport >= 100)
+                    {
+                        lastReport = now;
+                        progress.Report(new FetchProgress(currentName, doneBytes, doneFiles));
+                    }
+                }
+                else if (t == FEntryEnd)
+                {
+                    if (current != null) doneFiles++;
+                    current?.Dispose(); current = null;
+                }
             }
         }
         finally { current?.Dispose(); }
+        progress?.Report(new FetchProgress(currentName, doneBytes, doneFiles));
 
         return topNames.Select(n => Path.Combine(destDir, n))
             .Where(p => File.Exists(p) || Directory.Exists(p)).ToList();

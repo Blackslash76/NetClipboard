@@ -156,11 +156,11 @@ public sealed class TrayContext : ApplicationContext
     {
         _monitor.BeginInvoke(() =>
         {
+            // Silenzioso di proposito: la clip arriva in cronologia (Win+Alt+V),
+            // senza fumetto a ogni copia fatta sull'altro PC.
             _history.Add(clip.Payload, clip.FromName, isLocal: false);
             if (clip.Payload.Kind != PayloadKind.Files && _sharingEnabled)
                 _monitor.ApplyToClipboard(clip.Payload);
-            var hint = clip.Payload.Kind == PayloadKind.Files ? "  ·  Win+Alt+V per incollare" : "";
-            _tray.ShowBalloonTip(2500, $"Da {clip.FromName}", clip.Payload.ShortPreview() + hint, ToolTipIcon.Info);
         });
     }
 
@@ -194,13 +194,14 @@ public sealed class TrayContext : ApplicationContext
 
     private async Task MaterializeAsync(HistoryItem item, IntPtr target)
     {
+        TransferForm? ui = null;
         try
         {
+            // Già in locale: nessun trasferimento, nessuna finestra, nessun fumetto.
             if (item.LocalRootPaths is { Count: > 0 } && item.LocalRootPaths.All(Exists))
             {
                 ApplyFiles(item.LocalRootPaths);
                 PasteToTarget(target);
-                Balloon("NetClipboard", "Incollato.");
                 return;
             }
             if (item.IsLocalOffer) { Balloon("NetClipboard", "I file originali non sono più disponibili.", ToolTipIcon.Warning); return; }
@@ -210,19 +211,69 @@ public sealed class TrayContext : ApplicationContext
             if (owner == null) { Balloon("NetClipboard", $"{item.OwnerName} non è in linea (o non fidato).", ToolTipIcon.Warning); return; }
 
             var offerId = Guid.Parse(item.OfferId);
-            Balloon("NetClipboard", $"Scarico da {item.OwnerName} · {ClipboardPayload.HumanSize(item.TotalSize)}…");
             var destDir = Path.Combine(AppConfig.AppDataDir, "received", offerId.ToString("N")[..8]);
-            var roots = await _transport.FetchAsync(owner, offerId, destDir, CancellationToken.None);
+
+            using var cts = new CancellationTokenSource();
+            ui = ShowTransfer(item, cts);
+            var roots = await _transport.FetchAsync(owner, offerId, destDir, cts.Token, TransferProgress(ui));
             if (roots.Count == 0) { Balloon("NetClipboard", "Nessun file ricevuto.", ToolTipIcon.Warning); return; }
 
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
             PasteToTarget(target);
-            Balloon("NetClipboard", $"Incollato · {roots.Count} elemento/i.");
+        }
+        catch (OperationCanceledException)
+        {
+            // annullato dall'utente: nessun avviso
         }
         catch (Exception ex)
         {
             Balloon("NetClipboard", $"Download fallito: {ex.Message}", ToolTipIcon.Warning);
+        }
+        finally
+        {
+            CloseTransfer(ui);
+        }
+    }
+
+    // ----- Finestra di avanzamento del trasferimento file -----
+
+    /// <summary>Crea (sul thread UI) la finestrella di avanzamento; compare solo se il download dura.</summary>
+    private TransferForm? ShowTransfer(HistoryItem item, CancellationTokenSource cts)
+    {
+        if (!_monitor.IsHandleCreated) return null;
+        return (TransferForm)_monitor.Invoke(new Func<TransferForm>(() =>
+        {
+            var count = item.FileCount + item.DirCount;
+            var f = new TransferForm(
+                $"Ricevo i file da {item.OwnerName}",
+                $"{count} element{(count == 1 ? "o" : "i")}  ·  {ClipboardPayload.HumanSize(item.TotalSize)}",
+                item.TotalSize, cts);
+            f.ShowAfterDelay();
+            return f;
+        }));
+    }
+
+    private static void CloseTransfer(TransferForm? f)
+    {
+        if (f == null || f.IsDisposed) return;
+        try { f.BeginInvoke(f.Finish); } catch { }
+    }
+
+    private static IProgress<FetchProgress>? TransferProgress(TransferForm? f) =>
+        f == null ? null : new TransferProgressReporter(f);
+
+    /// <summary>Porta l'avanzamento dal thread di rete a quello della UI.</summary>
+    private sealed class TransferProgressReporter : IProgress<FetchProgress>
+    {
+        private readonly TransferForm _form;
+        public TransferProgressReporter(TransferForm form) => _form = form;
+
+        public void Report(FetchProgress p)
+        {
+            if (_form.IsDisposed || !_form.IsHandleCreated) return;
+            try { _form.BeginInvoke(() => { if (!_form.IsDisposed) _form.Report(p.CurrentName, p.BytesDone); }); }
+            catch { }
         }
     }
 
@@ -349,11 +400,10 @@ public sealed class TrayContext : ApplicationContext
     {
         var url = UpdateUrl;
         if (!Updater.IsConfigured(url)) { if (manual) Balloon("Aggiornamenti", "Non configurati.", ToolTipIcon.Info); return; }
-        if (manual) Balloon("Aggiornamenti", "Controllo in corso…");
         var info = await Updater.CheckAsync(url, CancellationToken.None);
         if (info == null) { if (manual) Balloon("Aggiornamenti", "Nessun aggiornamento disponibile."); return; }
         var path = await Updater.DownloadAsync(info, CancellationToken.None);
-        if (path == null) { Balloon("Aggiornamenti", "Download fallito (vedi log).", ToolTipIcon.Warning); return; }
+        if (path == null) { if (manual) Balloon("Aggiornamenti", "Download fallito (vedi log).", ToolTipIcon.Warning); return; }
         _pendingUpdatePath = path;
         if (_monitor.IsHandleCreated)
             _monitor.BeginInvoke(() =>

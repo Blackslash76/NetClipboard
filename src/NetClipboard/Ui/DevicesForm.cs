@@ -8,17 +8,34 @@ namespace NetClipboard.Ui;
 /// <summary>
 /// Gestione dispositivi: mostra l'identità di questo PC, i dispositivi fidati
 /// (con revoca) e quelli in rete da accoppiare (con codice). Consente anche il
-/// pairing per IP manuale.
+/// pairing per IP manuale. Interamente DPI-aware (vedi <see cref="ScaledForm"/>).
 /// </summary>
-public sealed class DevicesForm : Form
+public sealed class DevicesForm : ScaledForm
 {
+    // Misure logiche (a 96 DPI), scalate da P().
+    private const int ClientW = 560;
+    private const int Pad = 16;
+    private const int ListH = 152;
+    private const int BtnH = 30;
+
     private readonly DeviceIdentity _identity;
     private readonly TrustStore _trust;
     private readonly ClipboardTransport _transport;
 
+    private readonly Label _titleSelf = new() { Text = "Questo dispositivo" };
+    private readonly Label _self;
+    private readonly Label _titleTrusted = new() { Text = "Dispositivi fidati" };
+    private readonly Label _titleDiscovered = new() { Text = "In rete — da accoppiare" };
+    private readonly Label _lblManualIp = new() { Text = "Oppure per IP:" };
+
     private readonly ListView _trusted;
     private readonly ListView _discovered;
-    private readonly TextBox _manualIp;
+    private readonly TextBox _manualIp = new();
+    private readonly Button _revoke = new() { Text = "Revoca selezionato" };
+    private readonly Button _pair = new() { Text = "Accoppia selezionato" };
+    private readonly Button _scan = new() { Text = "Cerca in rete" };
+    private readonly Button _pairIp = new() { Text = "Accoppia per IP" };
+
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 2000 };
     private bool _busy;
 
@@ -34,59 +51,78 @@ public sealed class DevicesForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(540, 560);
-        Font = new Font("Segoe UI", 9f);
 
-        Controls.Add(new Label
-        {
-            Text = "Questo dispositivo",
-            Left = 16, Top = 14, Width = 500, Font = new Font("Segoe UI Semibold", 10f),
-        });
-        Controls.Add(new Label
+        _self = new Label
         {
             Text = $"{Environment.MachineName}   ·   impronta {DeviceIdentity.ShortFingerprint(_identity.DeviceId)}",
-            Left = 16, Top = 38, Width = 500, ForeColor = Color.DimGray,
+            ForeColor = Color.DimGray,
+        };
+        _trusted = MakeList("Nome", "Impronta");
+        _discovered = MakeList("Nome", "Indirizzo");
+
+        _revoke.Click += (_, _) => RevokeSelected();
+        _pair.Click += (_, _) => PairSelected();
+        _scan.Click += (_, _) => _transport.ScanOnDemand();
+        _pairIp.Click += (_, _) => PairManual();
+
+        Controls.AddRange(new Control[]
+        {
+            _titleSelf, _self,
+            _titleTrusted, _trusted, _revoke,
+            _titleDiscovered, _discovered, _pair, _scan,
+            _lblManualIp, _manualIp, _pairIp,
         });
-
-        Controls.Add(new Label { Text = "Dispositivi fidati", Left = 16, Top = 70, Width = 300, Font = new Font("Segoe UI Semibold", 10f) });
-        _trusted = MakeList(16, 94, 508, 150, "Nome", "Impronta");
-        Controls.Add(_trusted);
-        var revoke = new Button { Text = "Revoca selezionato", Left = 16, Top = 248, Width = 160, Height = 28 };
-        revoke.Click += (_, _) => RevokeSelected();
-        Controls.Add(revoke);
-
-        Controls.Add(new Label { Text = "In rete — da accoppiare", Left = 16, Top = 288, Width = 300, Font = new Font("Segoe UI Semibold", 10f) });
-        _discovered = MakeList(16, 312, 508, 150, "Nome", "Indirizzo");
-        Controls.Add(_discovered);
-        var pair = new Button { Text = "Accoppia selezionato", Left = 16, Top = 466, Width = 170, Height = 28 };
-        pair.Click += (_, _) => PairSelected();
-        Controls.Add(pair);
-
-        var scan = new Button { Text = "Cerca in rete", Left = 196, Top = 466, Width = 120, Height = 28 };
-        scan.Click += (_, _) => _transport.ScanOnDemand();
-        Controls.Add(scan);
-
-        Controls.Add(new Label { Text = "Oppure per IP:", Left = 16, Top = 514, Width = 90 });
-        _manualIp = new TextBox { Left = 110, Top = 510, Width = 200 };
-        Controls.Add(_manualIp);
-        var pairIp = new Button { Text = "Accoppia per IP", Left = 320, Top = 508, Width = 140, Height = 26 };
-        pairIp.Click += (_, _) => PairManual();
-        Controls.Add(pairIp);
 
         _refresh.Tick += (_, _) => RefreshLists();
         _refresh.Start();
         RefreshLists();
     }
 
-    private static ListView MakeList(int x, int y, int w, int h, string c1, string c2)
+    protected override void ApplyLayout()
+    {
+        var section = PxFont("Segoe UI Semibold", 13.5f);
+        _titleSelf.Font = section;
+        _titleTrusted.Font = section;
+        _titleDiscovered.Font = section;
+
+        var full = ClientW - 2 * Pad;
+        var y = 14;
+
+        _titleSelf.SetBounds(P(Pad), P(y), P(full), P(22)); y += 26;
+        _self.SetBounds(P(Pad), P(y), P(full), P(20)); y += 30;
+
+        _titleTrusted.SetBounds(P(Pad), P(y), P(300), P(22)); y += 26;
+        _trusted.SetBounds(P(Pad), P(y), P(full), P(ListH)); y += ListH + 8;
+        _revoke.SetBounds(P(Pad), P(y), P(170), P(BtnH)); y += BtnH + 14;
+
+        _titleDiscovered.SetBounds(P(Pad), P(y), P(300), P(22)); y += 26;
+        _discovered.SetBounds(P(Pad), P(y), P(full), P(ListH)); y += ListH + 8;
+        _pair.SetBounds(P(Pad), P(y), P(180), P(BtnH));
+        _scan.SetBounds(P(Pad + 190), P(y), P(130), P(BtnH)); y += BtnH + 16;
+
+        _lblManualIp.SetBounds(P(Pad), P(y + 5), P(100), P(20));
+        _manualIp.SetBounds(P(Pad + 104), P(y + 1), P(190), P(25));
+        _pairIp.SetBounds(P(Pad + 304), P(y), P(150), P(28));
+        y += 28 + Pad;
+
+        ClientSize = new Size(P(ClientW), P(y));
+
+        // le colonne non si scalano da sole
+        foreach (var lv in new[] { _trusted, _discovered })
+        {
+            lv.Columns[0].Width = P(230);
+            lv.Columns[1].Width = P(full - 230 - 24);
+        }
+    }
+
+    private static ListView MakeList(string c1, string c2)
     {
         var lv = new ListView
         {
-            Left = x, Top = y, Width = w, Height = h,
             View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false,
         };
-        lv.Columns.Add(c1, 220);
-        lv.Columns.Add(c2, 270);
+        lv.Columns.Add(c1);
+        lv.Columns.Add(c2);
         return lv;
     }
 

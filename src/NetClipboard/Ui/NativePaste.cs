@@ -17,6 +17,13 @@ internal static class NativePaste
     [DllImport("user32.dll")]
     private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
+    // Per trascinare una finestra senza barra del titolo.
+    [DllImport("user32.dll")]
+    public static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, int lParam);
+
     private const byte VK_CONTROL = 0x11;
     private const byte VK_V = 0x56;
     private const uint KEYEVENTF_KEYUP = 0x0002;

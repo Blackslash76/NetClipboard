@@ -5,13 +5,28 @@ namespace NetClipboard.Ui;
 /// <summary>
 /// Chiede all'utente di confermare che il codice a 6 cifre coincide con quello
 /// mostrato sull'altro PC (numeric comparison anti-intercettazione). Si auto-annulla
-/// dopo 60 secondi.
+/// dopo 60 secondi. Interamente DPI-aware (vedi <see cref="ScaledForm"/>).
 /// </summary>
-public sealed class SasDialog : Form
+public sealed class SasDialog : ScaledForm
 {
+    // Misure logiche (a 96 DPI), scalate da P().
+    private const int ClientW = 400;
+    private const int Pad = 20;
+
     private int _secondsLeft = 60;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
-    private readonly Button _ok;
+
+    private readonly Label _title = new() { Text = "Verifica il dispositivo" };
+    private readonly Label _peer;
+    private readonly Label _code;
+    private readonly Label _warn = new()
+    {
+        Text = "Conferma SOLO se lo stesso codice appare sull'altro PC.",
+        TextAlign = ContentAlignment.MiddleCenter,
+        ForeColor = Color.Silver,
+    };
+    private readonly Button _ok = new() { Text = "Confermo", DialogResult = DialogResult.OK };
+    private readonly Button _cancel = new() { Text = "Annulla", DialogResult = DialogResult.Cancel };
 
     public SasDialog(PairingPrompt prompt)
     {
@@ -22,54 +37,32 @@ public sealed class SasDialog : Form
         MaximizeBox = false;
         MinimizeBox = false;
         TopMost = true;
-        ClientSize = new Size(380, 260);
         BackColor = Color.FromArgb(28, 28, 34);
         ForeColor = Color.White;
-        Font = new Font("Segoe UI", 9.5f);
 
-        Controls.Add(new Label
-        {
-            Text = "Verifica il dispositivo",
-            Left = 20, Top = 18, Width = 340, Height = 24,
-            Font = new Font("Segoe UI Semibold", 12f),
-        });
-        Controls.Add(new Label
+        _peer = new Label
         {
             Text = $"{prompt.PeerName}\nimpronta {prompt.Fingerprint}",
-            Left = 20, Top = 48, Width = 340, Height = 40,
             ForeColor = Color.Gainsboro,
-        });
-
-        var spaced = string.Join("  ", prompt.Sas.ToCharArray());
-        Controls.Add(new Label
+        };
+        _code = new Label
         {
-            Text = spaced,
-            Left = 20, Top = 96, Width = 340, Height = 54,
+            Text = string.Join("  ", prompt.Sas.ToCharArray()),
             TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Consolas", 30f, FontStyle.Bold),
             ForeColor = Color.FromArgb(120, 200, 255),
-        });
-        Controls.Add(new Label
-        {
-            Text = "Conferma SOLO se lo stesso codice appare sull'altro PC.",
-            Left = 20, Top = 156, Width = 340, Height = 36,
-            TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Color.Silver,
-        });
+        };
 
-        _ok = new Button { Text = "Confermo", DialogResult = DialogResult.OK, Left = 150, Top = 210, Width = 100, Height = 30 };
-        var cancel = new Button { Text = "Annulla", DialogResult = DialogResult.Cancel, Left = 260, Top = 210, Width = 100, Height = 30 };
-        foreach (var b in new[] { _ok, cancel })
+        foreach (var b in new[] { _ok, _cancel })
         {
             b.FlatStyle = FlatStyle.Flat;
             b.ForeColor = Color.White;
             b.BackColor = Color.FromArgb(55, 55, 66);
         }
         _ok.BackColor = Color.FromArgb(30, 120, 200);
-        Controls.Add(_ok);
-        Controls.Add(cancel);
         AcceptButton = _ok;
-        CancelButton = cancel;
+        CancelButton = _cancel;
+
+        Controls.AddRange(new Control[] { _title, _peer, _code, _warn, _ok, _cancel });
 
         _timer.Tick += (_, _) =>
         {
@@ -83,6 +76,38 @@ public sealed class SasDialog : Form
             }
         };
         _timer.Start();
+    }
+
+    protected override Font CreateBaseFont() => PxFont("Segoe UI", 12.5f);
+
+    protected override void ApplyLayout()
+    {
+        _title.Font = PxFont("Segoe UI Semibold", 16f);
+
+        var full = ClientW - 2 * Pad;
+        var y = 18;
+
+        // il codice deve starci TUTTO: riduce il corpo finché non entra nella riga
+        var px = 40f;
+        while (px > 20f)
+        {
+            using var probe = new Font("Consolas", px * ScaleFactor, FontStyle.Bold, GraphicsUnit.Pixel);
+            if (TextRenderer.MeasureText(_code.Text, probe).Width <= P(full - 8))
+                break;
+            px -= 2f;
+        }
+        _code.Font = PxFont("Consolas", px, FontStyle.Bold);
+
+        _title.SetBounds(P(Pad), P(y), P(full), P(26)); y += 32;
+        _peer.SetBounds(P(Pad), P(y), P(full), P(42)); y += 50;
+        _code.SetBounds(P(Pad), P(y), P(full), P(58)); y += 66;
+        _warn.SetBounds(P(Pad), P(y), P(full), P(40)); y += 50;
+
+        _cancel.SetBounds(P(ClientW - Pad - 104), P(y), P(104), P(32));
+        _ok.SetBounds(_cancel.Left - P(112), P(y), P(104), P(32));
+        y += 32 + Pad;
+
+        ClientSize = new Size(P(ClientW), P(y));
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

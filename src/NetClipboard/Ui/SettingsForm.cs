@@ -3,11 +3,22 @@ using NetClipboard.Net;
 
 namespace NetClipboard.Ui;
 
-/// <summary>Finestra impostazioni: passphrase, porta, cronologia, avvio automatico.</summary>
-public sealed class SettingsForm : Form
+/// <summary>
+/// Finestra impostazioni: nome, porta, cronologia, condivisione, avvio automatico.
+/// Interamente DPI-aware (vedi <see cref="ScaledForm"/>).
+/// </summary>
+public sealed class SettingsForm : ScaledForm
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string RunValue = "NetClipboard";
+
+    // Misure logiche (a 96 DPI), scalate da P().
+    private const int ClientW = 470;
+    private const int Pad = 16;
+    private const int LabelW = 178;
+    private const int CtlX = 202;
+    private const int RowH = 32;
+    private const int FieldH = 25;
 
     private readonly AppConfig _config;
 
@@ -25,6 +36,23 @@ public sealed class SettingsForm : Form
     private readonly TextBox _updateUrl = new() { PlaceholderText = "predefinito (già incluso) · lascia vuoto" };
     private readonly TextBox _manualPeers = new() { Multiline = true, ScrollBars = ScrollBars.Vertical };
     private readonly Label _firewall = new() { AutoSize = true };
+    private readonly Button _firewallBtn = new() { Text = "Configura firewall" };
+    private readonly Button _ok = new() { Text = "Salva" };
+    private readonly Button _cancel = new() { Text = "Annulla" };
+
+    private readonly Label _lblName = new() { Text = "Nome di questo PC" };
+    private readonly Label _lblPort = new() { Text = "Porta (TCP/UDP)" };
+    private readonly Label _lblHistory = new() { Text = "Elementi in cronologia" };
+    private readonly Label _lblAge = new() { Text = "Conservazione (giorni, 0=∞)" };
+    private readonly Label _lblSize = new() { Text = "Dimensione max (MB)" };
+    private readonly Label _lblShare = new() { Text = "Condividi" };
+    private readonly Label _lblUpdateUrl = new() { Text = "URL update (opz.)" };
+    private readonly Label _lblPeers = new() { Text = "IP peer manuali" };
+    private readonly Label _lblPeersHint = new()
+    {
+        Text = "(uno per riga; basta che un lato inserisca l'IP dell'altro)",
+        ForeColor = Color.Gray,
+    };
 
     public SettingsForm(AppConfig config)
     {
@@ -36,79 +64,17 @@ public sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(420, 664);
-        Font = new Font("Segoe UI", 9f);
 
-        BuildLayout();
+        BuildControls();
         LoadFromConfig();
     }
 
-    private void BuildLayout()
+    /// <summary>Scatta quando l'utente salva le impostazioni.</summary>
+    public event Action? Saved;
+
+    private void BuildControls()
     {
-        var y = 16;
-        int Row() { var v = y; y += 30; return v; }
-
-        void AddLabel(string text, int rowY) =>
-            Controls.Add(new Label { Text = text, Left = 16, Top = rowY + 3, Width = 150, AutoSize = false });
-
-        AddLabel("Nome di questo PC", Row());
-        _name.SetBounds(180, y - 30, 220, 24);
-        Controls.Add(_name);
-
-        AddLabel("Porta (TCP/UDP)", Row());
-        _port.SetBounds(180, y - 30, 100, 24);
-        Controls.Add(_port);
-
-        AddLabel("Elementi in cronologia", Row());
-        _historySize.SetBounds(180, y - 30, 100, 24);
-        Controls.Add(_historySize);
-
-        AddLabel("Conservazione (giorni, 0=∞)", Row());
-        _maxAgeDays.SetBounds(180, y - 30, 100, 24);
-        Controls.Add(_maxAgeDays);
-
-        AddLabel("Dimensione max (MB)", Row());
-        _maxMb.SetBounds(180, y - 30, 100, 24);
-        Controls.Add(_maxMb);
-
-        AddLabel("Condividi", Row());
-        _shareText.Left = 180; _shareText.Top = y - 28;
-        _shareImages.Left = 250; _shareImages.Top = y - 28;
-        _shareFiles.Left = 340; _shareFiles.Top = y - 28;
-        Controls.Add(_shareText);
-        Controls.Add(_shareImages);
-        Controls.Add(_shareFiles);
-
-        y += 8;
-        _autostart.Left = 180; _autostart.Top = y; y += 28;
-        Controls.Add(_autostart);
-        _autoScan.Left = 180; _autoScan.Top = y; y += 28;
-        Controls.Add(_autoScan);
-        _autoUpdate.Left = 180; _autoUpdate.Top = y; y += 30;
-        Controls.Add(_autoUpdate);
-
-        AddLabel("URL update (opz.)", Row());
-        _updateUrl.SetBounds(180, y - 30, 224, 24);
-        Controls.Add(_updateUrl);
-
-        // IP peer manuali (quando il broadcast è bloccato)
-        Controls.Add(new Label { Text = "IP peer manuali", Left = 16, Top = y + 3, Width = 150 });
-        Controls.Add(new Label
-        {
-            Text = "(uno per riga; basta che un lato inserisca l'IP dell'altro)",
-            Left = 180, Top = y + 3, Width = 224, Height = 30,
-            ForeColor = Color.Gray, Font = new Font("Segoe UI", 7.5f),
-        });
-        y += 34;
-        _manualPeers.SetBounds(16, y, 388, 66);
-        Controls.Add(_manualPeers);
-        y += 76;
-
-        // Stato firewall + pulsante
-        _firewall.Left = 16; _firewall.Top = y + 4; _firewall.MaximumSize = new Size(280, 0);
-        Controls.Add(_firewall);
-        var fwBtn = new Button { Text = "Configura firewall", Left = 300, Top = y, Width = 104, Height = 26 };
-        fwBtn.Click += (_, _) =>
+        _firewallBtn.Click += (_, _) =>
         {
             if (FirewallHelper.IsElevated())
                 FirewallHelper.InstallRulesNow();
@@ -116,23 +82,89 @@ public sealed class SettingsForm : Form
                 FirewallHelper.RequestInstallElevated();
             UpdateFirewallLabel();
         };
-        Controls.Add(fwBtn);
-        y += 44;
+        _ok.Click += (_, _) => { SaveToConfig(); Saved?.Invoke(); Hide(); };
+        _cancel.Click += (_, _) => { LoadFromConfig(); Hide(); };
+        AcceptButton = _ok;
+        CancelButton = _cancel;
 
-        var ok = new Button { Text = "Salva", Left = 234, Top = y, Width = 80 };
-        var cancel = new Button { Text = "Annulla", Left = 322, Top = y, Width = 80 };
-        ok.Click += (_, _) => { SaveToConfig(); Saved?.Invoke(); Hide(); };
-        cancel.Click += (_, _) => { LoadFromConfig(); Hide(); };
-        Controls.Add(ok);
-        Controls.Add(cancel);
-        AcceptButton = ok;
-        CancelButton = cancel;
+        Controls.AddRange(new Control[]
+        {
+            _lblName, _name,
+            _lblPort, _port,
+            _lblHistory, _historySize,
+            _lblAge, _maxAgeDays,
+            _lblSize, _maxMb,
+            _lblShare, _shareText, _shareImages, _shareFiles,
+            _autostart, _autoScan, _autoUpdate,
+            _lblUpdateUrl, _updateUrl,
+            _lblPeers, _lblPeersHint, _manualPeers,
+            _firewall, _firewallBtn,
+            _ok, _cancel,
+        });
 
         UpdateFirewallLabel();
     }
 
-    /// <summary>Scatta quando l'utente salva le impostazioni.</summary>
-    public event Action? Saved;
+    protected override void ApplyLayout()
+    {
+        var hint = PxFont("Segoe UI", 10f);
+        _lblPeersHint.Font = hint;
+
+        var y = Pad;
+        var fieldW = ClientW - CtlX - Pad;
+
+        // Etichetta a sinistra + controllo a destra, su una riga.
+        void Row(Label label, Control ctl, int ctlW)
+        {
+            label.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
+            ctl.SetBounds(P(CtlX), P(y), P(ctlW), P(FieldH));
+            y += RowH;
+        }
+
+        Row(_lblName, _name, fieldW);
+        Row(_lblPort, _port, 110);
+        Row(_lblHistory, _historySize, 110);
+        Row(_lblAge, _maxAgeDays, 110);
+        Row(_lblSize, _maxMb, 110);
+
+        // Riga "Condividi": tre checkbox in fila, larghezza dettata dal testo.
+        _lblShare.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
+        var x = P(CtlX);
+        foreach (var cb in new[] { _shareText, _shareImages, _shareFiles })
+        {
+            cb.Location = new Point(x, P(y + 3));
+            x = cb.Right + P(12);
+        }
+        y += RowH;
+
+        y += 6;
+        foreach (var cb in new[] { _autostart, _autoScan, _autoUpdate })
+        {
+            cb.Location = new Point(P(CtlX), P(y));
+            y += 28;
+        }
+        y += 4;
+
+        Row(_lblUpdateUrl, _updateUrl, fieldW);
+
+        _lblPeers.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
+        _lblPeersHint.SetBounds(P(CtlX), P(y), P(fieldW), P(32));
+        y += 36;
+        _manualPeers.SetBounds(P(Pad), P(y), P(ClientW - 2 * Pad), P(70));
+        y += 80;
+
+        _firewall.MaximumSize = new Size(P(ClientW - 2 * Pad - 150), 0);
+        _firewall.Location = new Point(P(Pad), P(y + 4));
+        _firewallBtn.SetBounds(P(ClientW - Pad - 138), P(y), P(138), P(28));
+        // il testo del firewall va a capo: l'altezza reale (pixel) torna in unità logiche
+        y += Math.Max(44, (int)Math.Round(_firewall.Height / ScaleFactor) + 14);
+
+        _cancel.SetBounds(P(ClientW - Pad - 92), P(y), P(92), P(28));
+        _ok.SetBounds(_cancel.Left - P(100), P(y), P(92), P(28));
+        y += 28 + Pad;
+
+        ClientSize = new Size(P(ClientW), Math.Max(P(y), _ok.Bottom + P(Pad)));
+    }
 
     // La X non chiude: nasconde nella tray (si esce solo con "Esci").
     protected override void OnFormClosing(FormClosingEventArgs e)
