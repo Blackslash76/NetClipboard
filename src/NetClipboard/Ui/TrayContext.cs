@@ -31,6 +31,8 @@ public sealed class TrayContext : ApplicationContext
 
     private System.Threading.Timer? _updateTimer;
     private string? _pendingUpdatePath;
+    private SettingsForm? _settingsForm;
+    private DevicesForm? _devicesForm;
     private bool _sharingEnabled;
     private bool _warnedSize;
 
@@ -229,8 +231,18 @@ public sealed class TrayContext : ApplicationContext
 
     private void OpenDevices()
     {
-        using var form = new DevicesForm(_identity, _trust, _transport);
-        form.ShowDialog();
+        if (_devicesForm == null || _devicesForm.IsDisposed)
+            _devicesForm = new DevicesForm(_identity, _trust, _transport);
+        ShowTool(_devicesForm);
+    }
+
+    /// <summary>Mostra una finestra-strumento (non modale). La sua X la nasconde nella tray.</summary>
+    private static void ShowTool(Form f)
+    {
+        if (!f.Visible) f.Show();
+        if (f.WindowState == FormWindowState.Minimized) f.WindowState = FormWindowState.Normal;
+        f.Activate();
+        f.BringToFront();
     }
 
     // ----- Comandi UI -----
@@ -265,12 +277,12 @@ public sealed class TrayContext : ApplicationContext
 
     private void OpenSettings()
     {
-        using var form = new SettingsForm(_config);
-        if (form.ShowDialog() == DialogResult.OK)
+        if (_settingsForm == null || _settingsForm.IsDisposed)
         {
-            RestartNetwork();
-            UpdateTrayText();
+            _settingsForm = new SettingsForm(_config);
+            _settingsForm.Saved += () => { RestartNetwork(); UpdateTrayText(); };
         }
+        ShowTool(_settingsForm);
     }
 
     private void ConfigureFirewall()
@@ -384,6 +396,8 @@ public sealed class TrayContext : ApplicationContext
     {
         _tray.Visible = false;
         _updateTimer?.Dispose();
+        _settingsForm?.Dispose();
+        _devicesForm?.Dispose();
         _discovery.Dispose();
         _transport.Dispose();
         _tray.Dispose();

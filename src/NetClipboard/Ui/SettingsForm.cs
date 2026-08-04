@@ -119,15 +119,41 @@ public sealed class SettingsForm : Form
         Controls.Add(fwBtn);
         y += 44;
 
-        var ok = new Button { Text = "Salva", DialogResult = DialogResult.OK, Left = 234, Top = y, Width = 80 };
-        var cancel = new Button { Text = "Annulla", DialogResult = DialogResult.Cancel, Left = 322, Top = y, Width = 80 };
-        ok.Click += (_, _) => SaveToConfig();
+        var ok = new Button { Text = "Salva", Left = 234, Top = y, Width = 80 };
+        var cancel = new Button { Text = "Annulla", Left = 322, Top = y, Width = 80 };
+        ok.Click += (_, _) => { SaveToConfig(); Saved?.Invoke(); Hide(); };
+        cancel.Click += (_, _) => { LoadFromConfig(); Hide(); };
         Controls.Add(ok);
         Controls.Add(cancel);
         AcceptButton = ok;
         CancelButton = cancel;
 
         UpdateFirewallLabel();
+    }
+
+    /// <summary>Scatta quando l'utente salva le impostazioni.</summary>
+    public event Action? Saved;
+
+    // La X non chiude: nasconde nella tray (si esce solo con "Esci").
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            LoadFromConfig(); // scarta modifiche non salvate
+            Hide();
+        }
+        base.OnFormClosing(e);
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        if (Visible)
+        {
+            LoadFromConfig();
+            UpdateFirewallLabel();
+        }
+        base.OnVisibleChanged(e);
     }
 
     private void UpdateFirewallLabel()

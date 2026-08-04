@@ -198,6 +198,24 @@ public sealed class DevicesForm : Form
         finally { _busy = false; }
     }
 
+    // La X non chiude: nasconde nella tray (si esce solo con "Esci").
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (e.CloseReason == CloseReason.UserClosing)
+        {
+            e.Cancel = true;
+            Hide();
+        }
+        base.OnFormClosing(e);
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        if (Visible) { RefreshLists(); _refresh.Start(); }
+        else _refresh.Stop();
+        base.OnVisibleChanged(e);
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _refresh.Dispose();
