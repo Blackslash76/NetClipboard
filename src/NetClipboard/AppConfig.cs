@@ -1,6 +1,4 @@
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -8,12 +6,11 @@ namespace NetClipboard;
 
 /// <summary>
 /// Configurazione persistente dell'applicazione, salvata in
-/// %AppData%\NetClipboard\config.json. La password non viene mai salvata in
-/// chiaro: si usa DPAPI (ProtectedData) legata all'utente Windows corrente.
+/// %AppData%\NetClipboard\config.json. L'identità e la fiducia stanno altrove
+/// (identity.key, trusted.json): qui solo preferenze e cache.
 /// </summary>
 public sealed class AppConfig
 {
-    public Guid InstanceId { get; set; } = Guid.NewGuid();
     public string DisplayName { get; set; } = Environment.MachineName;
     public int Port { get; set; } = 45654;
 
@@ -49,21 +46,6 @@ public sealed class AppConfig
 
     /// <summary>Cache degli IP dei peer già visti: al riavvio si ripingano (niente scan).</summary>
     public List<string> KnownPeerIps { get; set; } = new();
-
-    /// <summary>Password protetta con DPAPI (base64). Non leggibile fuori dall'utente.</summary>
-    public string ProtectedPassword { get; set; } = "";
-
-    // ----- Non serializzato: la password in chiaro vive solo in memoria -----
-
-    [JsonIgnore]
-    public string Password
-    {
-        get => Unprotect(ProtectedPassword);
-        set => ProtectedPassword = Protect(value);
-    }
-
-    [JsonIgnore]
-    public bool HasPassword => !string.IsNullOrEmpty(ProtectedPassword);
 
     // ----- Percorsi -----
 
@@ -118,33 +100,6 @@ public sealed class AppConfig
         catch
         {
             // best effort
-        }
-    }
-
-    // ----- DPAPI helper -----
-
-    private static string Protect(string plain)
-    {
-        if (string.IsNullOrEmpty(plain))
-            return "";
-        var bytes = Encoding.UTF8.GetBytes(plain);
-        var prot = ProtectedData.Protect(bytes, null, DataProtectionScope.CurrentUser);
-        return Convert.ToBase64String(prot);
-    }
-
-    private static string Unprotect(string protectedB64)
-    {
-        if (string.IsNullOrEmpty(protectedB64))
-            return "";
-        try
-        {
-            var prot = Convert.FromBase64String(protectedB64);
-            var bytes = ProtectedData.Unprotect(prot, null, DataProtectionScope.CurrentUser);
-            return Encoding.UTF8.GetString(bytes);
-        }
-        catch
-        {
-            return "";
         }
     }
 }
