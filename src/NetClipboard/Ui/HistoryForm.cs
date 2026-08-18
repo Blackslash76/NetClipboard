@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using System.IO;
 using NetClipboard.Core;
@@ -28,16 +29,16 @@ public sealed class HistoryForm : Form
     private const int RowH = 62;
 
     private readonly ClipboardHistory _history;
-    private readonly BufferedListBox _list;
+    private readonly ClipList _list;
     private readonly Dictionary<string, Image> _thumbCache = new();
 
     /// <summary>Righe gia' ridisegnate come scadute: si smorzano una volta sola.</summary>
     private readonly HashSet<string> _expired = new();
 
     /// <summary>
-    /// Fa scorrere le torte di scadenza mentre la finestra e' aperta, e toglie le
-    /// voci esterne appena scadono invece di lasciarle li' fino alla riapertura.
-    /// Gira solo a finestra visibile e solo se c'e' qualcosa di esterno.
+    /// Fa scorrere gli anelli di scadenza mentre la finestra e' aperta, e smorza
+    /// le voci esterne appena scadono invece di lasciarle attive fino alla
+    /// riapertura. Gira solo a finestra visibile e solo finche' serve.
     /// </summary>
     private readonly System.Windows.Forms.Timer _expiryTick = new() { Interval = 1000 };
 
@@ -63,15 +64,12 @@ public sealed class HistoryForm : Form
         DoubleBuffered = true;
         BackColor = Bg;
 
-        _list = new BufferedListBox
+        _list = new ClipList
         {
-            DrawMode = DrawMode.OwnerDrawFixed,
-            BorderStyle = BorderStyle.None,
             BackColor = Bg,
             ForeColor = TextMain,
-            IntegralHeight = false,
         };
-        _list.DrawItem += OnDrawItem;
+        _list.DrawRow += DrawRow;
         _list.KeyDown += OnKeyDown;
         _list.MouseUp += OnMouseUp;
         Controls.Add(_list);
@@ -83,10 +81,8 @@ public sealed class HistoryForm : Form
         {
             if (!Visible) { _expiryTick.Stop(); return; }
 
-            // Si tocca SOLO cio' che cambia: le righe scadute si tolgono in posto e
-            // delle altre si ridisegna il singolo rettangolo. Ricostruire la lista o
-            // invalidarla tutta ogni secondo faceva sfarfallare l'elenco e perdere
-            // selezione e posizione di scorrimento.
+            // Si tocca solo cio' che cambia: delle righe ancora vive si ridisegna
+            // il singolo rettangolo, e quelle appena scadute una volta sola.
             var alive = false;
             var expired = false;
             var rows = new List<Rectangle>();
@@ -105,21 +101,10 @@ public sealed class HistoryForm : Form
                 rows.Add(_list.GetItemRectangle(i));
             }
 
-            // Togliere una voce sposta le altre: li' serve una pittura normale,
-            // con la cancellazione al suo posto. Solo l'aggiornamento del solo
-            // anello puo' saltarla, ed e' quello che lampeggiava.
-            if (expired) _list.Invalidate();   // pittura normale: cambia l'aspetto di una riga
-
-            if (!expired && rows.Count > 0)
-            {
-                _list.SuppressErase = true;
-                try
-                {
-                    foreach (var r in rows) _list.Invalidate(r);
-                    _list.Update();   // dipinge subito, finche' la soppressione vale
-                }
-                finally { _list.SuppressErase = false; }
-            }
+            // Con la lista disegnata da noi basta invalidare: WinForms dipinge su
+            // back buffer e riversa in una passata sola, senza cancellazione prima.
+            if (expired) _list.Invalidate();
+            else foreach (var r in rows) _list.Invalidate(r);
 
             if (!alive) _expiryTick.Stop();
         };
@@ -196,13 +181,9 @@ public sealed class HistoryForm : Form
 
     private void Reload()
     {
-        _list.BeginUpdate();
-        _list.Items.Clear();
-        foreach (var it in _history.Items
-                     .OrderByDescending(i => i.Pinned)
-                     .ThenByDescending(i => i.TimestampUtc))
-            _list.Items.Add(it);
-        _list.EndUpdate();
+        _list.SetItems(_history.Items
+            .OrderByDescending(i => i.Pinned)
+            .ThenByDescending(i => i.TimestampUtc));
     }
 
     private void ChooseSelected()
@@ -278,18 +259,11 @@ public sealed class HistoryForm : Form
             Color.FromArgb(115, 117, 130), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     }
 
-    private void OnDrawItem(object? sender, DrawItemEventArgs e)
+    private void DrawRow(Graphics g, HistoryItem item, Rectangle bounds, bool selected)
     {
-        if (e.Index < 0 || _list.Items[e.Index] is not HistoryItem item) return;
-
-        var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var selected = (e.State & DrawItemState.Selected) != 0;
 
-        using (var bg = new SolidBrush(Bg))
-            g.FillRectangle(bg, e.Bounds);
-
-        var row = new Rectangle(e.Bounds.Left + P(6), e.Bounds.Top + P(4), e.Bounds.Width - P(12), e.Bounds.Height - P(8));
+        var row = new Rectangle(bounds.Left + P(6), bounds.Top + P(4), bounds.Width - P(12), bounds.Height - P(8));
         using (var rb = new SolidBrush(selected ? SelBg : Card))
             g.FillRoundedRect(rb, row, P(10));
         if (selected)
@@ -463,32 +437,162 @@ public sealed class HistoryForm : Form
         base.OnFormClosing(e);
     }
 
-    private sealed class BufferedListBox : ListBox
+    /// <summary>
+    /// Lista disegnata interamente da noi, al posto di un ListBox.
+    ///
+    /// Il motivo e' lo sfarfallio: il ListBox e' un controllo Win32 e le sue righe
+    /// non passano dal doppio buffering gestito. Il Graphics che arriva a DrawItem
+    /// e' costruito sull'HDC dello schermo, quindi il disegno va diretto a video
+    /// dopo che il controllo ha gia' cancellato la superficie — due passate, un
+    /// lampeggio, e nessuna impostazione di buffering lo evita. Sopprimere
+    /// WM_ERASEBKGND riduceva il problema senza risolverlo.
+    ///
+    /// Qui invece UserPaint fa gestire WM_PAINT a WinForms, che con
+    /// OptimizedDoubleBuffer dipinge su un back buffer vero e lo riversa in una
+    /// passata sola; Opaque evita del tutto la richiesta di cancellazione. Si
+    /// ridisegnano solo le righe che intersecano l'area invalidata.
+    /// </summary>
+    private sealed class ClipList : Control
     {
-        private const int WM_ERASEBKGND = 0x0014;
+        private const int ScrollbarW = 4;
 
-        /// <summary>
-        /// Mentre e' true la cancellazione dello sfondo viene saltata.
-        ///
-        /// Il ListBox e' un controllo Win32: prima cancella la superficie, poi
-        /// chiede il disegno della riga. Due passate sullo schermo, cioe' un
-        /// lampeggio, che il doppio buffering di WinForms non copre perche' il
-        /// disegno non passa dal back buffer gestito. Si tiene attiva solo per il
-        /// ridisegno periodico dell'anello: le pitture normali cancellano come
-        /// sempre, cosi' l'area sotto l'ultima riga resta pulita.
-        /// </summary>
-        public bool SuppressErase;
+        private readonly List<HistoryItem> _items = new();
+        private int _selected = -1;
+        private int _scroll;
 
-        public BufferedListBox()
+        /// <summary>Disegna una riga: superficie, elemento, rettangolo, selezionata.</summary>
+        public event Action<Graphics, HistoryItem, Rectangle, bool>? DrawRow;
+
+        public ClipList()
         {
-            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
-            DoubleBuffered = true;
+            SetStyle(ControlStyles.UserPaint
+                   | ControlStyles.AllPaintingInWmPaint
+                   | ControlStyles.OptimizedDoubleBuffer
+                   | ControlStyles.Opaque
+                   | ControlStyles.ResizeRedraw
+                   | ControlStyles.Selectable, true);
+            TabStop = true;
         }
 
-        protected override void WndProc(ref Message m)
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public int ItemHeight { get; set; } = 60;
+
+        public IReadOnlyList<HistoryItem> Items => _items;
+
+        public HistoryItem? SelectedItem =>
+            _selected >= 0 && _selected < _items.Count ? _items[_selected] : null;
+
+        [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+        public int SelectedIndex
         {
-            if (SuppressErase && m.Msg == WM_ERASEBKGND) { m.Result = 1; return; }
-            base.WndProc(ref m);
+            get => _selected;
+            set
+            {
+                var v = _items.Count == 0 ? -1 : Math.Clamp(value, -1, _items.Count - 1);
+                if (v == _selected) return;
+                _selected = v;
+                EnsureVisible(v);
+                Invalidate();
+            }
+        }
+
+        public void SetItems(IEnumerable<HistoryItem> items)
+        {
+            var keep = SelectedItem?.Id;
+            _items.Clear();
+            _items.AddRange(items);
+            _selected = keep == null ? -1 : _items.FindIndex(i => i.Id == keep);
+            ClampScroll();
+            Invalidate();
+        }
+
+        /// <summary>Rettangolo della riga in coordinate client (puo' cadere fuori dalla vista).</summary>
+        public Rectangle GetItemRectangle(int index) =>
+            new(0, index * ItemHeight - _scroll, ClientSize.Width, ItemHeight);
+
+        public int IndexFromPoint(Point p)
+        {
+            if (ItemHeight <= 0) return -1;
+            var i = (p.Y + _scroll) / ItemHeight;
+            return i >= 0 && i < _items.Count ? i : -1;
+        }
+
+        private int MaxScroll => Math.Max(0, _items.Count * ItemHeight - ClientSize.Height);
+
+        private void ClampScroll() => _scroll = Math.Clamp(_scroll, 0, MaxScroll);
+
+        private void EnsureVisible(int index)
+        {
+            if (index < 0) return;
+            var top = index * ItemHeight;
+            if (top < _scroll) _scroll = top;
+            else if (top + ItemHeight > _scroll + ClientSize.Height)
+                _scroll = top + ItemHeight - ClientSize.Height;
+            ClampScroll();
+        }
+
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            var before = _scroll;
+            _scroll -= e.Delta / 120 * ItemHeight;
+            ClampScroll();
+            if (_scroll != before) Invalidate();
+            base.OnMouseWheel(e);
+        }
+
+        // Senza questo le frecce e Invio finirebbero alla finestra e non al controllo.
+        protected override bool IsInputKey(Keys keyData) =>
+            keyData is Keys.Up or Keys.Down or Keys.PageUp or Keys.PageDown
+                    or Keys.Home or Keys.End or Keys.Enter
+            || base.IsInputKey(keyData);
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            var page = Math.Max(1, ClientSize.Height / Math.Max(1, ItemHeight));
+            switch (e.KeyCode)
+            {
+                case Keys.Up: SelectedIndex = Math.Max(0, _selected - 1); e.Handled = true; break;
+                case Keys.Down: SelectedIndex = _selected + 1; e.Handled = true; break;
+                case Keys.PageUp: SelectedIndex = Math.Max(0, _selected - page); e.Handled = true; break;
+                case Keys.PageDown: SelectedIndex = _selected + page; e.Handled = true; break;
+                case Keys.Home: SelectedIndex = 0; e.Handled = true; break;
+                case Keys.End: SelectedIndex = _items.Count - 1; e.Handled = true; break;
+            }
+            base.OnKeyDown(e); // la finestra gestisce Invio, Esc e Canc
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            using (var bg = new SolidBrush(BackColor))
+                g.FillRectangle(bg, e.ClipRectangle);
+
+            if (_items.Count == 0 || ItemHeight <= 0) return;
+
+            var first = Math.Max(0, (_scroll + e.ClipRectangle.Top) / ItemHeight);
+            var last = Math.Min(_items.Count - 1, (_scroll + e.ClipRectangle.Bottom) / ItemHeight);
+            for (var i = first; i <= last; i++)
+                DrawRow?.Invoke(g, _items[i], GetItemRectangle(i), i == _selected);
+
+            DrawScrollbar(g);
+        }
+
+        /// <summary>Barra sottile, disegnata solo quando il contenuto eccede la vista.</summary>
+        private void DrawScrollbar(Graphics g)
+        {
+            var max = MaxScroll;
+            if (max <= 0) return;
+
+            var track = ClientSize.Height;
+            var h = Math.Max(24, (int)((long)track * track / (_items.Count * ItemHeight)));
+            var y = (int)((long)(track - h) * _scroll / max);
+            var bar = new Rectangle(ClientSize.Width - ScrollbarW - 2, y, ScrollbarW, h);
+
+            var saved = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var b = new SolidBrush(Color.FromArgb(90, 150, 152, 165)))
+                g.FillRoundedRect(b, bar, ScrollbarW / 2);
+            g.SmoothingMode = saved;
         }
     }
 }
