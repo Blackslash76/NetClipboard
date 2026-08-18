@@ -19,6 +19,13 @@ public sealed class TrayContext : ApplicationContext
     private readonly AppConfig _config;
     private readonly DeviceIdentity _identity;
     private readonly EntraAuth _entra;
+
+    /// <summary>
+    /// Freno alla condivisione automatica: uno script che copia in ciclo
+    /// riempirebbe rete e cronologia di tutti i dispositivi.
+    /// </summary>
+    private readonly RateGuard _outgoingGuard =
+        new(warnCount: 8, blockCount: 15, window: TimeSpan.FromSeconds(10), blockFor: TimeSpan.FromSeconds(30));
     private readonly TrustStore _trust;
     private readonly OfferStore _offerStore;
     private readonly ClipboardHistory _history;
@@ -39,6 +46,7 @@ public sealed class TrayContext : ApplicationContext
     private DevicesForm? _devicesForm;
     private bool _sharingEnabled;
     private bool _warnedSize;
+    private bool _rateBlockNotified;
 
     public TrayContext()
     {
@@ -65,6 +73,11 @@ public sealed class TrayContext : ApplicationContext
         {
             PairingConfirm = ShowSasDialog,
             OfferConfirm = ShowIncomingOfferDialog,
+        };
+        _transport.ContentBlocked += from =>
+        {
+            if (_monitor.IsHandleCreated)
+                _monitor.BeginInvoke(() => Balloon(L.T("app.name"), L.T("msg.blockedIncoming", from), ToolTipIcon.Error));
         };
         _discovery = new PeerDiscovery(_config, ip => _transport.AddCandidate(ip));
         _historyForm = new HistoryForm(_history, _config);
@@ -154,6 +167,23 @@ public sealed class TrayContext : ApplicationContext
         if (!IsShareable(payload)) return;
         if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
 
+        switch (_outgoingGuard.Check())
+        {
+            case RateVerdict.Warn:
+                Balloon(L.T("app.name"), L.T("msg.rateWarn"), ToolTipIcon.Warning);
+                break;
+            case RateVerdict.Blocked:
+                // Il fumetto esce una volta sola: ripeterlo a ogni tentativo
+                // durante la sospensione sarebbe esso stesso una raffica.
+                if (!_rateBlockNotified)
+                {
+                    _rateBlockNotified = true;
+                    Balloon(L.T("app.name"), L.T("msg.rateBlocked", _outgoingGuard.BlockedSecondsLeft), ToolTipIcon.Warning);
+                }
+                return;
+        }
+        _rateBlockNotified = false;
+
         _ = _transport.SendAsync(payload);
     }
 
@@ -237,6 +267,11 @@ public sealed class TrayContext : ApplicationContext
             var roots = await _transport.FetchAsync(owner, offerId, destDir, cts.Token, TransferProgress(ui));
             if (roots.Count == 0) { Balloon(L.T("app.name"), L.T("msg.noFiles"), ToolTipIcon.Warning); return; }
 
+            // Qui i byte esistono davvero: e' il momento in cui l'analisi ha senso.
+            // Se l'antivirus riconosce qualcosa, i file non arrivano alla clipboard
+            // e vengono tolti dal disco.
+            if (item.FromExternal && !await VerifyDownloadedAsync(roots, destDir)) return;
+
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
             PasteToTarget(target);
@@ -267,6 +302,41 @@ public sealed class TrayContext : ApplicationContext
     {
         if (item.Kind != PayloadKind.Files || item.IsLocalOffer) return;
         _history.MarkUsed(item.Id);
+    }
+
+    /// <summary>
+    /// Analizza i file appena scaricati da un utente esterno. Se sono puliti lo
+    /// dice, perche' e' l'informazione che chi riceve stava aspettando; se non lo
+    /// sono li cancella e avvisa.
+    /// </summary>
+    private async Task<bool> VerifyDownloadedAsync(IReadOnlyList<string> roots, string destDir)
+    {
+        var files = new List<string>();
+        foreach (var r in roots)
+        {
+            if (File.Exists(r)) files.Add(r);
+            else if (Directory.Exists(r))
+                try { files.AddRange(Directory.EnumerateFiles(r, "*", SearchOption.AllDirectories)); }
+                catch { }
+        }
+        if (files.Count == 0) return true;
+
+        var result = await Task.Run(() =>
+        {
+            var v = AntimalwareScan.ScanFiles(files, out var n);
+            return (Verdict: v, Name: n);
+        });
+
+        if (result.Verdict == ScanVerdict.Malware)
+        {
+            try { Directory.Delete(destDir, recursive: true); } catch { }
+            Balloon(L.T("app.name"), L.T("msg.filesInfected", result.Name ?? ""), ToolTipIcon.Error);
+            return false;
+        }
+
+        if (result.Verdict == ScanVerdict.Clean)
+            Balloon(L.T("app.name"), L.T("msg.filesVerified"));
+        return true;
     }
 
     // ----- Finestra di avanzamento del trasferimento file -----
@@ -456,6 +526,10 @@ public sealed class TrayContext : ApplicationContext
         if (payload.Kind == PayloadKind.Files && payload.Offer != null) _offerStore.Register(payload.Offer);
         if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
 
+        // Si controlla prima di spedire: chi manda un file infetto quasi sempre non
+        // lo sa, e accorgersene qui evita di far arrivare il problema a un collega.
+        if (!await ScanBeforeSendAsync(payload)) return;
+
         Balloon(L.T("app.name"), L.T("msg.sendingTo", peer.Label));
         var outcome = await _transport.SendToAsync(peer, payload);
         Balloon(L.T("app.name"),
@@ -466,6 +540,35 @@ public sealed class TrayContext : ApplicationContext
                 _ => L.T("msg.sendFailed", peer.Label),
             },
             outcome == SendOutcome.Delivered ? ToolTipIcon.Info : ToolTipIcon.Warning);
+    }
+
+    /// <summary>
+    /// Analizza i file che stiamo per mandare con l'antivirus del PC. Restituisce
+    /// false se l'invio va annullato. Gira fuori dal thread dell'interfaccia:
+    /// leggere e analizzare decine di MB bloccherebbe la finestra.
+    /// </summary>
+    private async Task<bool> ScanBeforeSendAsync(ClipboardPayload payload)
+    {
+        if (payload.Kind != PayloadKind.Files || payload.Offer?.RootParents == null) return true;
+
+        var offer = payload.Offer;
+        var paths = offer.Entries
+            .Where(e => !e.IsDir)
+            .Select(e => offer.ResolveLocal(e))
+            .Where(x => x != null)
+            .Select(x => x!)
+            .ToList();
+        if (paths.Count == 0) return true;
+
+        var result = await Task.Run(() =>
+        {
+            var v = AntimalwareScan.ScanFiles(paths, out var n);
+            return (Verdict: v, Name: n);
+        });
+
+        if (result.Verdict != ScanVerdict.Malware) return true;
+        Balloon(L.T("app.name"), L.T("msg.blockedOutgoing", result.Name ?? ""), ToolTipIcon.Error);
+        return false;
     }
 
     /// <summary>Conferma di ricezione da un peer non accoppiato. Bloccante: il mittente attende la risposta.</summary>

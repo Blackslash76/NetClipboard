@@ -24,7 +24,8 @@ public sealed record PairingPrompt(string Sas, string PeerName, string Fingerpri
 public enum PairOutcome { Paired, Rejected, Failed }
 
 /// <summary>Richiesta di invio in arrivo da un peer NON accoppiato: va confermata a mano.</summary>
-public sealed record IncomingOffer(string FromLabel, string FromDeviceId, PayloadKind Kind, string Preview);
+public sealed record IncomingOffer(string FromLabel, string FromDeviceId, PayloadKind Kind, string Preview,
+                                   ScanVerdict Scan = ScanVerdict.NotScanned);
 
 public enum SendOutcome { Delivered, Declined, Failed }
 
@@ -83,6 +84,9 @@ public sealed class ClipboardTransport : IDisposable
 
     /// <summary>Chiamato quando un peer NON accoppiato ci manda qualcosa; ritorna true se l'utente accetta.</summary>
     public Func<IncomingOffer, bool>? OfferConfirm;
+
+    /// <summary>Un contenuto in arrivo e' stato riconosciuto come dannoso e scartato senza chiedere nulla.</summary>
+    public event Action<string>? ContentBlocked;
 
     /// <summary>
     /// Identità aziendale di chi usa questo PC, annunciata nel ping perché gli
@@ -283,11 +287,25 @@ public sealed class ClipboardTransport : IDisposable
             return;
         }
 
+        // Testo e immagini arrivano per intero insieme alla richiesta, quindi si
+        // analizzano PRIMA di mostrarla: se sono dannosi l'utente non deve nemmeno
+        // vedersi proporre la scelta. I file portano solo l'elenco, il contenuto
+        // arriva dopo: li' l'analisi avviene a scaricamento finito.
+        var verdict = ScanIncoming(payload);
+        if (verdict == ScanVerdict.Malware)
+        {
+            Interlocked.Exchange(ref _offerDialogOpen, 0);
+            await WriteSessionAsync(stream, s.Cipher, new byte[] { 0 }, ct);
+            Log.Write($"[Transport] contenuto da {label} scartato: riconosciuto come dannoso");
+            ContentBlocked?.Invoke(label);
+            return;
+        }
+
         bool accepted;
         try
         {
             accepted = OfferConfirm?.Invoke(
-                new IncomingOffer(label, s.R.PeerDeviceId, payload.Kind, payload.ShortPreview())) ?? false;
+                new IncomingOffer(label, s.R.PeerDeviceId, payload.Kind, payload.ShortPreview(), verdict)) ?? false;
         }
         finally { Interlocked.Exchange(ref _offerDialogOpen, 0); }
 
@@ -307,6 +325,17 @@ public sealed class ClipboardTransport : IDisposable
     /// </summary>
     public bool HasAcceptedOffer(string deviceId, Guid offerId) =>
         StillValid(_acceptedOffers, GrantKey(deviceId, offerId));
+
+    /// <summary>
+    /// Analizza cio' che e' gia' arrivato. Per i file non c'e' ancora nulla da
+    /// analizzare: viaggiano come elenco, e il contenuto si preleva dopo.
+    /// </summary>
+    private static ScanVerdict ScanIncoming(ClipboardPayload payload) => payload.Kind switch
+    {
+        PayloadKind.Text => AntimalwareScan.ScanBytes(Encoding.UTF8.GetBytes(payload.Text ?? ""), "clipboard.txt"),
+        PayloadKind.Image => AntimalwareScan.ScanBytes(payload.ImagePng ?? Array.Empty<byte>(), "clipboard.png"),
+        _ => ScanVerdict.NotScanned,
+    };
 
     private static string GrantKey(string deviceId, Guid offerId) => deviceId + ":" + offerId.ToString("N");
 

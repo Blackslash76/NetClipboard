@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>NetClipboard</RootNamespace>
     <AssemblyName>NetClipboard</AssemblyName>
-    <Version>2.2.1</Version>
+    <Version>2.3.0</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Product>NetClipboard</Product>
     <Description>Clipboard condivisa peer-to-peer sulla LAN</Description>

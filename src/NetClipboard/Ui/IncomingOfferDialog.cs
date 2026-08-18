@@ -1,4 +1,5 @@
 using NetClipboard.Core;
+using NetClipboard.Core.Security;
 using NetClipboard.Net;
 
 namespace NetClipboard.Ui;
@@ -28,6 +29,13 @@ public sealed class IncomingOfferDialog : ScaledForm
         TextAlign = ContentAlignment.MiddleCenter,
         ForeColor = Color.Silver,
     };
+    /// <summary>
+    /// Esito del controllo antivirus. Compare solo quando l'analisi e' avvenuta
+    /// davvero su questo PC: un bollino verde non veritiero sarebbe peggio del
+    /// silenzio, perche' rassicura senza che nessuno abbia controllato.
+    /// </summary>
+    private readonly Label _scan = new() { TextAlign = ContentAlignment.MiddleCenter };
+
     private readonly Button _accept = new() { DialogResult = DialogResult.OK };
     private readonly Button _refuse = new() { DialogResult = DialogResult.Cancel };
 
@@ -62,6 +70,23 @@ public sealed class IncomingOfferDialog : ScaledForm
             AutoEllipsis = true,
         };
 
+        // Per i file il contenuto non e' ancora arrivato: si dichiara che sara'
+        // controllato, invece di fingere che lo sia gia' stato.
+        if (offer.Scan == ScanVerdict.Clean)
+        {
+            _scan.Text = L.T("incoming.verified");
+            _scan.ForeColor = Color.FromArgb(90, 210, 130);
+        }
+        else if (offer.Kind == PayloadKind.Files && AntimalwareScan.Available)
+        {
+            _scan.Text = L.T("incoming.willVerify");
+            _scan.ForeColor = Color.FromArgb(150, 152, 165);
+        }
+        else
+        {
+            _scan.Visible = false;
+        }
+
         foreach (var b in new[] { _accept, _refuse })
         {
             b.FlatStyle = FlatStyle.Flat;
@@ -72,7 +97,7 @@ public sealed class IncomingOfferDialog : ScaledForm
         AcceptButton = _accept;
         CancelButton = _refuse;
 
-        Controls.AddRange(new Control[] { _title, _from, _preview, _warn, _accept, _refuse });
+        Controls.AddRange(new Control[] { _title, _from, _preview, _scan, _warn, _accept, _refuse });
 
         _timer.Tick += (_, _) =>
         {
@@ -101,13 +126,15 @@ public sealed class IncomingOfferDialog : ScaledForm
     {
         _title.Font = PxFont("Segoe UI Semibold", 16f);
         _preview.Font = PxFont("Segoe UI", 12f);
+        _scan.Font = PxFont("Segoe UI Semibold", 11.5f);
 
         var full = ClientW - 2 * Pad;
         var y = 18;
 
         _title.SetBounds(P(Pad), P(y), P(full), P(26)); y += 34;
         _from.SetBounds(P(Pad), P(y), P(full), P(42)); y += 48;
-        _preview.SetBounds(P(Pad), P(y), P(full), P(44)); y += 52;
+        _preview.SetBounds(P(Pad), P(y), P(full), P(44)); y += 50;
+        if (_scan.Visible) { _scan.SetBounds(P(Pad), P(y), P(full), P(22)); y += 26; }
         _warn.SetBounds(P(Pad), P(y), P(full), P(40)); y += 48;
 
         _refuse.SetBounds(P(ClientW - Pad - 104), P(y), P(104), P(32));
