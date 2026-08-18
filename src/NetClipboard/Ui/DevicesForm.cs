@@ -26,6 +26,11 @@ public sealed class DevicesForm : ScaledForm
     private readonly Label _self = new() { ForeColor = Color.DimGray };
     private readonly Label _titleTrusted = new();
     private readonly Label _titleDiscovered = new();
+
+    // Le due righe che spiegano la differenza fra le sezioni. E' il punto in cui
+    // l'utente decide, quindi la spiegazione sta li' e non in un manuale.
+    private readonly Label _hintTrusted = new() { ForeColor = Color.Gray };
+    private readonly Label _hintDiscovered = new() { ForeColor = Color.Gray };
     private readonly Label _lblManualIp = new();
 
     private readonly ListView _trusted;
@@ -63,8 +68,8 @@ public sealed class DevicesForm : ScaledForm
         Controls.AddRange(new Control[]
         {
             _titleSelf, _self,
-            _titleTrusted, _trusted, _revoke,
-            _titleDiscovered, _discovered, _pair, _scan,
+            _titleTrusted, _hintTrusted, _trusted, _revoke,
+            _titleDiscovered, _hintDiscovered, _discovered, _pair, _scan,
             _lblManualIp, _manualIp, _pairIp,
         });
 
@@ -82,6 +87,8 @@ public sealed class DevicesForm : ScaledForm
             DeviceIdentity.ShortFingerprint(_identity.DeviceId));
         _titleTrusted.Text = L.T("devices.trusted");
         _titleDiscovered.Text = L.T("devices.discovered");
+        _hintTrusted.Text = L.T("devices.trustedHint");
+        _hintDiscovered.Text = L.T("devices.discoveredHint");
         _lblManualIp.Text = L.T("devices.byIp");
         _revoke.Text = L.T("devices.revoke");
         _pair.Text = L.T("devices.pair");
@@ -97,6 +104,10 @@ public sealed class DevicesForm : ScaledForm
     protected override void ApplyLayout()
     {
         var section = PxFont("Segoe UI Semibold", 13.5f);
+        var hint = PxFont("Segoe UI", 10.5f);
+        _hintTrusted.Font = hint;
+        _hintDiscovered.Font = hint;
+
         _titleSelf.Font = section;
         _titleTrusted.Font = section;
         _titleDiscovered.Font = section;
@@ -107,14 +118,16 @@ public sealed class DevicesForm : ScaledForm
         _titleSelf.SetBounds(P(Pad), P(y), P(full), P(22)); y += 26;
         _self.SetBounds(P(Pad), P(y), P(full), P(20)); y += 30;
 
-        _titleTrusted.SetBounds(P(Pad), P(y), P(300), P(22)); y += 26;
+        _titleTrusted.SetBounds(P(Pad), P(y), P(300), P(22)); y += 24;
+        _hintTrusted.SetBounds(P(Pad), P(y), P(full), P(18)); y += 22;
         _trusted.SetBounds(P(Pad), P(y), P(full), P(ListH)); y += ListH + 8;
-        _revoke.SetBounds(P(Pad), P(y), P(170), P(BtnH)); y += BtnH + 14;
+        _revoke.SetBounds(P(Pad), P(y), P(210), P(BtnH)); y += BtnH + 14;
 
-        _titleDiscovered.SetBounds(P(Pad), P(y), P(300), P(22)); y += 26;
+        _titleDiscovered.SetBounds(P(Pad), P(y), P(300), P(22)); y += 24;
+        _hintDiscovered.SetBounds(P(Pad), P(y), P(full), P(18)); y += 22;
         _discovered.SetBounds(P(Pad), P(y), P(full), P(ListH)); y += ListH + 8;
-        _pair.SetBounds(P(Pad), P(y), P(180), P(BtnH));
-        _scan.SetBounds(P(Pad + 190), P(y), P(130), P(BtnH)); y += BtnH + 16;
+        _pair.SetBounds(P(Pad), P(y), P(210), P(BtnH));
+        _scan.SetBounds(P(Pad + 220), P(y), P(130), P(BtnH)); y += BtnH + 16;
 
         _lblManualIp.SetBounds(P(Pad), P(y + 5), P(100), P(20));
         _manualIp.SetBounds(P(Pad + 104), P(y + 1), P(190), P(25));

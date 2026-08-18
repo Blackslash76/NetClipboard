@@ -429,21 +429,40 @@ public sealed class TrayContext : ApplicationContext
         _sendToItem.Enabled = peers.Count > 0;
         if (peers.Count == 0) return;
 
-        // L'invio a tutta la propria mesh era una voce a se' nel menu: qui sta
-        // meglio, in cima alla stessa lista di destinatari.
-        if (peers.Any(p => p.Trusted))
+        // Due gruppi con intestazione, non un elenco unico: e' qui che si vede la
+        // differenza fra i propri dispositivi, dove la clipboard viaggia da sola,
+        // e gli altri, a cui si manda qualcosa e che devono accettarlo.
+        var mine = peers.Where(p => p.Trusted).ToList();
+        var others = peers.Where(p => !p.Trusted).ToList();
+
+        if (mine.Count > 0)
         {
+            AddMenuHeader(_sendToItem, L.T("tray.sendToMine"));
             _sendToItem.DropDownItems.Add(
                 new ToolStripMenuItem(L.T("tray.sendToAll"), null, (_, _) => SendCurrentClipboard()));
-            _sendToItem.DropDownItems.Add(new ToolStripSeparator());
+            foreach (var p in mine)
+                _sendToItem.DropDownItems.Add(
+                    new ToolStripMenuItem("🔒 " + p.Label, null, (_, _) => _ = SendToAsync(p)));
         }
 
-        foreach (var p in peers)
+        if (others.Count > 0)
         {
-            var mark = p.Trusted ? "🔒 " : "• "; // simboli, non testo da tradurre
-            _sendToItem.DropDownItems.Add(
-                new ToolStripMenuItem(mark + p.Label, null, (_, _) => _ = SendToAsync(p)));
+            if (mine.Count > 0) _sendToItem.DropDownItems.Add(new ToolStripSeparator());
+            AddMenuHeader(_sendToItem, L.T("tray.sendToOthers"));
+            foreach (var p in others)
+                _sendToItem.DropDownItems.Add(
+                    new ToolStripMenuItem("• " + p.Label, null, (_, _) => _ = SendToAsync(p)));
         }
+    }
+
+    /// <summary>Riga di intestazione dentro un menu: non cliccabile, serve solo a orientarsi.</summary>
+    private static void AddMenuHeader(ToolStripMenuItem parent, string text)
+    {
+        parent.DropDownItems.Add(new ToolStripMenuItem(text)
+        {
+            Enabled = false,
+            Font = new Font(SystemFonts.MenuFont!, FontStyle.Bold),
+        });
     }
 
     private async Task SendToAsync(Peer peer)
