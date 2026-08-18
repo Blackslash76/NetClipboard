@@ -30,6 +30,13 @@ public sealed class HistoryForm : Form
     private readonly BufferedListBox _list;
     private readonly Dictionary<string, Image> _thumbCache = new();
 
+    /// <summary>
+    /// Fa scorrere le torte di scadenza mentre la finestra e' aperta, e toglie le
+    /// voci esterne appena scadono invece di lasciarle li' fino alla riapertura.
+    /// Gira solo a finestra visibile e solo se c'e' qualcosa di esterno.
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _expiryTick = new() { Interval = 1000 };
+
     private float _scale = 1f;
     private Font _fTitle = null!, _fSub = null!, _fHint = null!, _fFooter = null!,
                  _fPreview = null!, _fMeta = null!, _fBadge = null!;
@@ -67,6 +74,19 @@ public sealed class HistoryForm : Form
 
         Deactivate += (_, _) => Hide();
         Paint += OnPaintChrome;
+
+        _expiryTick.Tick += (_, _) =>
+        {
+            if (!Visible) { _expiryTick.Stop(); return; }
+            var hadExternal = false;
+            foreach (var o in _list.Items)
+                if (o is HistoryItem { FromExternal: true }) { hadExternal = true; break; }
+            if (!hadExternal) { _expiryTick.Stop(); return; }
+
+            _history.PurgeExpired(); // se qualcosa e' scaduto, Reload lo togliera'
+            if (_list.Items.Count != _history.Items.Count) Reload();
+            else _list.Invalidate();
+        };
     }
 
     private int P(double v) => (int)Math.Round(v * _scale);
@@ -123,6 +143,7 @@ public sealed class HistoryForm : Form
         ApplyScale();
         _history.PurgeExpired();
         Reload();
+        _expiryTick.Start();
 
         var pos = Cursor.Position;
         var screen = Screen.FromPoint(pos).WorkingArea;
@@ -266,14 +287,55 @@ public sealed class HistoryForm : Form
             new Rectangle(textLeft, row.Top + P(9), textWidth, P(22)), TextMain,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
 
+        // Contenuto arrivato da un utente esterno: la torta a destra dice quanto
+        // manca alla scadenza, cosi' si capisce a colpo d'occhio che e' di passaggio.
+        if (item.FromExternal)
+        {
+            var pieSz = P(16);
+            var pie = new Rectangle(row.Right - P(12) - pieSz, row.Top + (row.Height - pieSz) / 2, pieSz, pieSz);
+            DrawExpiryPie(g, pie, RemainingFraction(item));
+            textWidth -= pieSz + P(10);
+        }
+
         var pin = item.Pinned ? "📌 " : "";
         var toFetch = item.Kind == PayloadKind.Files && !item.IsLocalOffer
             && (item.LocalRootPaths == null || item.LocalRootPaths.Count == 0) ? L.T("history.toDownload") : "";
-        var meta = L.T("history.meta", pin, item.IsLocal ? L.T("history.thisPc") : item.Origin,
-            LocalTime(item.TimestampUtc), toFetch);
+        var origin = item.IsLocal ? L.T("history.thisPc") : item.Origin;
+        if (item.FromExternal) origin = L.T("history.external", origin);
+        var meta = L.T("history.meta", pin, origin, LocalTime(item.TimestampUtc), toFetch);
         TextRenderer.DrawText(g, meta, _fMeta,
             new Rectangle(textLeft, row.Top + P(33), textWidth, P(20)), TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
+    }
+
+    /// <summary>Quanta vita resta a un contenuto esterno, da 1 (appena arrivato) a 0 (scaduto).</summary>
+    private static double RemainingFraction(HistoryItem item)
+    {
+        var total = ClipboardHistory.ExternalLifetime(item.Kind).TotalMilliseconds;
+        if (total <= 0) return 0;
+        var left = total - (DateTime.UtcNow - item.TimestampUtc).TotalMilliseconds;
+        return Math.Clamp(left / total, 0, 1);
+    }
+
+    /// <summary>
+    /// Torta di scadenza: si svuota in senso orario col passare del tempo e vira
+    /// all'arancione sull'ultimo quarto, quando conviene sbrigarsi.
+    /// </summary>
+    private static void DrawExpiryPie(Graphics g, Rectangle box, double fraction)
+    {
+        var color = fraction <= 0.25
+            ? Color.FromArgb(240, 150, 60)
+            : Color.FromArgb(110, 170, 240);
+
+        using (var track = new Pen(Color.FromArgb(70, 90, 90, 110), Math.Max(1f, box.Width / 10f)))
+            g.DrawEllipse(track, box);
+
+        if (fraction <= 0) return;
+        var saved = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var fill = new SolidBrush(color))
+            g.FillPie(fill, box, -90f, (float)(360.0 * fraction));
+        g.SmoothingMode = saved;
     }
 
     private static (Color, Color, string) BadgeStyle(HistoryItem item) => item.Kind switch

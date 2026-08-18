@@ -98,7 +98,7 @@
   "devices.address": "Indirizzo",
   "devices.revoke": "Revoca selezionato",
   "devices.revokeTitle": "Revoca",
-  "devices.revokeConfirm": "Revocare la fiducia a \"{0}\"?\n\nVale per questo PC e non si annulla da sola: gli altri dispositivi non potranno piu' reintrodurlo. Per escluderlo ovunque, revocalo anche sugli altri tuoi PC.",
+  "devices.revokeConfirm": "Revocare la fiducia a \"{0}\"?\n\nVale per questo PC e non si annulla da sola: gli altri dispositivi non potranno più reintrodurlo. Per escluderlo ovunque, revocalo anche sugli altri tuoi PC.",
   "devices.pair": "Accoppia selezionato",
   "devices.scan": "Cerca in rete",
   "devices.byIp": "Oppure per IP:",
@@ -135,6 +135,7 @@
   "history.pin": "Aggiungi pin",
   "history.unpin": "Rimuovi pin",
   "history.thisPc": "questo PC",
+  "history.external": "↗ {0} (esterno)",
   "history.toDownload": "  ·  da scaricare",
   "history.meta": "{0}{1}  ·  {2}{3}",
 

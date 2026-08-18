@@ -33,6 +33,19 @@ public sealed class HistoryItem
     /// <summary>Percorsi radice locali: originali (host) o scaricati (destinatario). Null se non ancora materializzato.</summary>
     public List<string>? LocalRootPaths { get; set; }
 
+    /// <summary>
+    /// Arrivato da un utente NON accoppiato, tramite "Invia a…". Roba di passaggio:
+    /// si segnala nell'elenco e dura poco (vedi <see cref="ClipboardHistory.ExternalLifetime"/>).
+    /// </summary>
+    public bool FromExternal { get; set; }
+
+    /// <summary>
+    /// Hash del contenuto, per la deduplica. Va persistito: senza, dopo un riavvio
+    /// l'indice ripartiva vuoto e ricopiare la stessa cosa creava un doppione di
+    /// una voce gia' in elenco.
+    /// </summary>
+    public string Hash { get; set; } = "";
+
     [JsonIgnore]
     public bool IsLocal { get; set; }
 }
@@ -44,6 +57,17 @@ public sealed class HistoryItem
 /// </summary>
 public sealed class ClipboardHistory
 {
+    /// <summary>
+    /// Quanto resta in cronologia un contenuto ricevuto da un utente esterno.
+    ///
+    /// I file durano quanto il permesso di prelievo concesso dal mittente: scaduto
+    /// quello la voce non sarebbe piu' scaricabile, quindi tenerla servirebbe solo
+    /// a far cliccare a vuoto. Testo e immagini sono gia' arrivati per intero e
+    /// restano piu' a lungo, il tempo di ritrovarli e incollarli.
+    /// </summary>
+    public static TimeSpan ExternalLifetime(PayloadKind kind) =>
+        kind == PayloadKind.Files ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(15);
+
     private readonly AppConfig _config;
     private readonly List<HistoryItem> _items = new();
     private readonly Dictionary<string, string> _hashToId = new();
@@ -79,7 +103,7 @@ public sealed class ClipboardHistory
         lock (_gate) return _items.FirstOrDefault(i => i.Id == id);
     }
 
-    public HistoryItem Add(ClipboardPayload payload, string origin, bool isLocal)
+    public HistoryItem Add(ClipboardPayload payload, string origin, bool isLocal, bool fromExternal = false)
     {
         PurgeExpired();
         var hash = payload.ContentHash();
@@ -94,6 +118,7 @@ public sealed class ClipboardHistory
                     existing.TimestampUtc = DateTime.UtcNow;
                     existing.Origin = origin;
                     existing.IsLocal = isLocal;
+                    existing.FromExternal = fromExternal;
                     _items.Insert(0, existing);
                     Persist();
                     Changed?.Invoke();
@@ -106,6 +131,8 @@ public sealed class ClipboardHistory
                 Kind = payload.Kind,
                 Origin = origin,
                 IsLocal = isLocal,
+                FromExternal = fromExternal,
+                Hash = hash,
                 Preview = payload.ShortPreview(),
             };
 
@@ -190,18 +217,25 @@ public sealed class ClipboardHistory
     /// <summary>Rimuove gli elementi non fissati più vecchi del limite di età configurato.</summary>
     public void PurgeExpired()
     {
+        var now = DateTime.UtcNow;
         var days = _config.HistoryMaxAgeDays;
-        if (days <= 0)
-            return;
-        var cutoff = DateTime.UtcNow.AddDays(-days);
+
+        // Gli esterni scadono comunque, anche con la conservazione illimitata:
+        // e' contenuto di passaggio, non cronologia propria.
+        bool Expired(HistoryItem i)
+        {
+            if (i.Pinned) return false;
+            if (i.FromExternal && now - i.TimestampUtc > ExternalLifetime(i.Kind)) return true;
+            return days > 0 && i.TimestampUtc < now.AddDays(-days);
+        }
+
         var changed = false;
         lock (_gate)
         {
-            foreach (var it in _items.Where(i => !i.Pinned && i.TimestampUtc < cutoff).ToList())
+            foreach (var it in _items.Where(Expired).ToList())
             {
                 _items.Remove(it);
-                var key = _hashToId.FirstOrDefault(kv => kv.Value == it.Id).Key;
-                if (key != null) _hashToId.Remove(key);
+                Deindex(it);
                 DeleteBlob(it);
                 changed = true;
             }
@@ -269,6 +303,14 @@ public sealed class ClipboardHistory
         }
     }
 
+    /// <summary>Toglie la voce dall'indice di deduplica, se e' lei a occuparne la chiave.</summary>
+    private void Deindex(HistoryItem item)
+    {
+        if (item.Hash.Length == 0) return;
+        if (_hashToId.TryGetValue(item.Hash, out var id) && id == item.Id)
+            _hashToId.Remove(item.Hash);
+    }
+
     private void TrimUnlocked()
     {
         var max = Math.Max(5, _config.HistorySize);
@@ -277,6 +319,7 @@ public sealed class ClipboardHistory
             var victim = _items.LastOrDefault(i => !i.Pinned);
             if (victim == null) break;
             _items.Remove(victim);
+            Deindex(victim);
             DeleteBlob(victim);
         }
     }
@@ -309,7 +352,15 @@ public sealed class ClipboardHistory
         {
             if (!File.Exists(IndexPath)) return;
             var items = JsonSerializer.Deserialize<List<HistoryItem>>(File.ReadAllText(IndexPath));
-            if (items != null) _items.AddRange(items);
+            if (items == null) return;
+            _items.AddRange(items);
+
+            // Indice ricostruito dal disco: senza, la deduplica ripartiva da zero a
+            // ogni avvio. Le voci salvate da versioni precedenti non hanno l'hash e
+            // rientreranno nell'indice alla prima ricopiatura.
+            foreach (var it in _items)
+                if (it.Hash.Length > 0)
+                    _hashToId[it.Hash] = it.Id;
         }
         catch { }
         PurgeExpired();

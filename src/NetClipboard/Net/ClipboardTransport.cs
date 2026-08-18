@@ -10,7 +10,13 @@ using NetClipboard.Core.Security;
 
 namespace NetClipboard.Net;
 
-public sealed record ReceivedClip(ClipboardPayload Payload, string FromName, string FromDeviceId);
+/// <summary>
+/// Contenuto arrivato da un peer. <paramref name="FromExternal"/> distingue il
+/// mirroring fra i propri dispositivi da un invio accettato da un estraneo:
+/// il secondo va segnalato nell'elenco e dura poco.
+/// </summary>
+public sealed record ReceivedClip(ClipboardPayload Payload, string FromName, string FromDeviceId,
+                                  bool FromExternal = false);
 
 /// <summary>Dati mostrati all'utente per confermare un pairing (codice + chi).</summary>
 public sealed record PairingPrompt(string Sas, string PeerName, string Fingerprint);
@@ -85,18 +91,28 @@ public sealed class ClipboardTransport : IDisposable
     public WorkIdentity? SelfWork { get; set; }
 
     /// <summary>
-    /// Permessi di prelievo file concessi uno per uno: "il dispositivo X può
-    /// scaricare l'offerta Y". Servono perché un invio a un non accoppiato
-    /// possa contenere file senza aprire OpFetch a chiunque.
+    /// Quanto dura il permesso di prelevare i file di un invio accettato.
+    ///
+    /// Breve di proposito: l'invio a un utente esterno e' un gesto puntuale, non
+    /// una condivisione permanente. Passata la finestra il mittente torna chiuso
+    /// e la voce sparisce anche dalla cronologia del destinatario.
     /// </summary>
-    private readonly ConcurrentDictionary<string, byte> _fetchGrants = new();
+    private static readonly TimeSpan GrantLifetime = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// Permessi di prelievo file concessi uno per uno: "il dispositivo X può
+    /// scaricare l'offerta Y fino all'istante Z". Servono perché un invio a un
+    /// non accoppiato possa contenere file senza aprire OpFetch a chiunque.
+    /// Il valore e' l'istante della concessione (Environment.TickCount64).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, long> _fetchGrants = new();
 
     /// <summary>
     /// L'altra faccia di <see cref="_fetchGrants"/>: le offerte che NOI abbiamo
     /// accettato da un peer non accoppiato. Senza questo elenco il prelievo dei
     /// file si fermerebbe, perché FetchAsync pretende un peer fidato.
     /// </summary>
-    private readonly ConcurrentDictionary<string, byte> _acceptedOffers = new();
+    private readonly ConcurrentDictionary<string, long> _acceptedOffers = new();
 
     /// <summary>Ultima richiesta di invio per peer, per non farsi tempestare di finestre.</summary>
     private readonly ConcurrentDictionary<string, long> _lastOfferAt = new();
@@ -278,11 +294,11 @@ public sealed class ClipboardTransport : IDisposable
         // Se sono file, il contenuto non è ancora arrivato: va annotato il permesso
         // di andarselo a prendere, altrimenti il prelievo verrebbe rifiutato.
         if (accepted && payload.Kind == PayloadKind.Files && payload.Offer != null)
-            _acceptedOffers.TryAdd(GrantKey(s.R.PeerDeviceId, payload.Offer.OfferId), 1);
+            _acceptedOffers[GrantKey(s.R.PeerDeviceId, payload.Offer.OfferId)] = Environment.TickCount64;
 
         await WriteSessionAsync(stream, s.Cipher, new[] { accepted ? (byte)1 : (byte)0 }, ct);
         Log.Write($"[Transport] invio da {label}: {(accepted ? "accettato" : "rifiutato")}");
-        if (accepted) Received?.Invoke(new ReceivedClip(payload, label, s.R.PeerDeviceId));
+        if (accepted) Received?.Invoke(new ReceivedClip(payload, label, s.R.PeerDeviceId, FromExternal: true));
     }
 
     /// <summary>
@@ -290,12 +306,25 @@ public sealed class ClipboardTransport : IDisposable
     /// che autorizza a prelevarne i file pur non avendolo mai accoppiato.
     /// </summary>
     public bool HasAcceptedOffer(string deviceId, Guid offerId) =>
-        _acceptedOffers.ContainsKey(GrantKey(deviceId, offerId));
+        StillValid(_acceptedOffers, GrantKey(deviceId, offerId));
 
     private static string GrantKey(string deviceId, Guid offerId) => deviceId + ":" + offerId.ToString("N");
 
     private bool IsGranted(string deviceId, Guid offerId) =>
-        _fetchGrants.ContainsKey(GrantKey(deviceId, offerId));
+        StillValid(_fetchGrants, GrantKey(deviceId, offerId));
+
+    /// <summary>
+    /// Permesso valido solo dentro la finestra. La scadenza si verifica in lettura
+    /// e la voce si toglie li' per li': niente timer di pulizia, e un permesso
+    /// scaduto non puo' tornare buono per una svista.
+    /// </summary>
+    private static bool StillValid(ConcurrentDictionary<string, long> map, string key)
+    {
+        if (!map.TryGetValue(key, out var granted)) return false;
+        if (Environment.TickCount64 - granted <= (long)GrantLifetime.TotalMilliseconds) return true;
+        map.TryRemove(key, out _);
+        return false;
+    }
 
     // ===================== CLIENT =====================
 
@@ -373,7 +402,7 @@ public sealed class ClipboardTransport : IDisposable
         // è la stessa mesh, si usa il percorso normale.
         var op = peer.Trusted ? OpPush : OpOffer;
         if (payload.Kind == PayloadKind.Files && payload.Offer != null && !peer.Trusted)
-            _fetchGrants.TryAdd(GrantKey(peer.DeviceId, payload.Offer.OfferId), 1);
+            _fetchGrants[GrantKey(peer.DeviceId, payload.Offer.OfferId)] = Environment.TickCount64;
 
         try
         {

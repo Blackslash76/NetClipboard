@@ -169,7 +169,7 @@ public sealed class TrayContext : ApplicationContext
         {
             // Silenzioso di proposito: la clip arriva in cronologia (Win+Alt+V),
             // senza fumetto a ogni copia fatta sull'altro PC.
-            _history.Add(clip.Payload, clip.FromName, isLocal: false);
+            _history.Add(clip.Payload, clip.FromName, isLocal: false, fromExternal: clip.FromExternal);
             if (clip.Payload.Kind != PayloadKind.Files && _sharingEnabled)
                 _monitor.ApplyToClipboard(clip.Payload);
         });
