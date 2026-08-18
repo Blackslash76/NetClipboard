@@ -218,10 +218,23 @@ public sealed class TrayContext : ApplicationContext
             if (item.IsLocalOffer) { Balloon(L.T("app.name"), L.T("msg.originalsGone"), ToolTipIcon.Warning); return; }
             if (string.IsNullOrEmpty(item.OwnerId) || string.IsNullOrEmpty(item.OfferId)) return;
 
-            var owner = _transport.Peers.FirstOrDefault(p => p.DeviceId == item.OwnerId && p.Trusted);
-            if (owner == null) { Balloon(L.T("app.name"), L.T("msg.ownerOffline", item.OwnerName), ToolTipIcon.Warning); return; }
-
             var offerId = Guid.Parse(item.OfferId);
+
+            // I file possono venire sia da un dispositivo accoppiato sia da un collega
+            // di cui abbiamo accettato l'invio. Cercare il peer e verificare il permesso
+            // sono due cose distinte: confonderle faceva dire "non e' in linea" a chi
+            // era in linea eccome, ma semplicemente non era accoppiato.
+            var owner = _transport.Peers.FirstOrDefault(p => p.DeviceId == item.OwnerId);
+            if (owner == null)
+            {
+                Balloon(L.T("app.name"), L.T("msg.ownerOffline", item.OwnerName), ToolTipIcon.Warning);
+                return;
+            }
+            if (!owner.Trusted && !_transport.HasAcceptedOffer(owner.DeviceId, offerId))
+            {
+                Balloon(L.T("app.name"), L.T("msg.ownerNotAllowed", item.OwnerName), ToolTipIcon.Warning);
+                return;
+            }
             var destDir = Path.Combine(AppConfig.AppDataDir, "received", offerId.ToString("N")[..8]);
 
             using var cts = new CancellationTokenSource();

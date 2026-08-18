@@ -285,6 +285,13 @@ public sealed class ClipboardTransport : IDisposable
         if (accepted) Received?.Invoke(new ReceivedClip(payload, label, s.R.PeerDeviceId));
     }
 
+    /// <summary>
+    /// True se abbiamo accettato proprio quell'offerta da quel dispositivo: e' cio'
+    /// che autorizza a prelevarne i file pur non avendolo mai accoppiato.
+    /// </summary>
+    public bool HasAcceptedOffer(string deviceId, Guid offerId) =>
+        _acceptedOffers.ContainsKey(GrantKey(deviceId, offerId));
+
     private static string GrantKey(string deviceId, Guid offerId) => deviceId + ":" + offerId.ToString("N");
 
     private bool IsGranted(string deviceId, Guid offerId) =>
@@ -697,6 +704,16 @@ public sealed class ClipboardTransport : IDisposable
         foreach (var g in gossip)
         {
             if (g.DeviceId == _identity.DeviceId) continue;
+
+            // Un dispositivo revocato a mano non torna dentro da solo: senza questo
+            // controllo la revoca durava il tempo del ping successivo, perche' un
+            // altro peer della mesh lo riannunciava e lo si rifidava in automatico.
+            if (_trust.IsRevoked(g.DeviceId))
+            {
+                Log.Write($"[Mesh] introduzione ignorata, revocato: {g.Name} ({DeviceIdentity.ShortFingerprint(g.DeviceId)})");
+                continue;
+            }
+
             if (!_trust.IsTrusted(g.DeviceId) && g.Pub.Length > 0)
             {
                 _trust.Trust(g.DeviceId, g.Name, g.Pub);

@@ -27,7 +27,20 @@ public sealed class TrustedDevice
 public sealed class TrustStore
 {
     private readonly string _path;
+    private readonly string _revokedPath;
     private readonly Dictionary<string, TrustedDevice> _devices = new();
+
+    /// <summary>
+    /// Dispositivi revocati a mano: lapidi permanenti.
+    ///
+    /// Senza questo elenco la revoca non reggeva: il gossip della mesh reintroduce
+    /// i dispositivi annunciati dagli altri fidati, e siccome il ping gira ogni tre
+    /// secondi bastava attendere per ritrovarsi il revocato di nuovo in lista.
+    /// Si azzera solo con un pairing esplicito, cioe' quando l'utente riconferma
+    /// di persona il codice a sei cifre.
+    /// </summary>
+    private readonly HashSet<string> _revoked = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly Lock _gate = new();
 
     public event Action? Changed;
@@ -35,7 +48,17 @@ public sealed class TrustStore
     public TrustStore(string? path = null)
     {
         _path = path ?? Path.Combine(AppConfig.AppDataDir, "trusted.json");
+        // File separato: cosi' trusted.json resta leggibile dalle versioni precedenti.
+        _revokedPath = Path.Combine(Path.GetDirectoryName(_path)!, "revoked.json");
         Load();
+        LoadRevoked();
+    }
+
+    /// <summary>True se il dispositivo e' stato revocato a mano e non va rifidato da solo.</summary>
+    public bool IsRevoked(string deviceId)
+    {
+        lock (_gate)
+            return _revoked.Contains(deviceId);
     }
 
     public bool IsTrusted(string deviceId)
@@ -66,10 +89,16 @@ public sealed class TrustStore
         get { lock (_gate) return _devices.Values.ToList(); }
     }
 
+    /// <summary>
+    /// Concede la fiducia. E' un atto esplicito, quindi cancella un'eventuale
+    /// revoca precedente: il chiamante deve aver gia' scartato i revocati se
+    /// l'origine e' automatica (vedi ProcessGossip).
+    /// </summary>
     public void Trust(string deviceId, string name, byte[] publicKeyDer, bool introducer = true)
     {
         lock (_gate)
         {
+            if (_revoked.Remove(deviceId)) PersistRevoked();
             _devices[deviceId] = new TrustedDevice
             {
                 DeviceId = deviceId,
@@ -84,18 +113,51 @@ public sealed class TrustStore
 
     public void Revoke(string deviceId)
     {
-        bool removed;
         lock (_gate)
         {
-            removed = _devices.Remove(deviceId);
-            if (removed) Persist();
+            _devices.Remove(deviceId);
+            Persist();
+            // La lapide si scrive comunque, anche se il dispositivo non era in
+            // elenco: puo' essere stato tolto un attimo prima e stare per tornare
+            // dal gossip di un altro peer.
+            if (_revoked.Add(deviceId)) PersistRevoked();
         }
-        if (removed) Changed?.Invoke();
+        Changed?.Invoke();
+    }
+
+    /// <summary>Dimentica la revoca senza concedere fiducia: il dispositivo torna accoppiabile a mano.</summary>
+    public void ClearRevocation(string deviceId)
+    {
+        lock (_gate)
+        {
+            if (!_revoked.Remove(deviceId)) return;
+            PersistRevoked();
+        }
+        Changed?.Invoke();
     }
 
     private void Persist()
     {
         try { File.WriteAllText(_path, JsonSerializer.Serialize(_devices.Values.ToList())); }
+        catch { }
+    }
+
+    private void PersistRevoked()
+    {
+        try { File.WriteAllText(_revokedPath, JsonSerializer.Serialize(_revoked.ToList())); }
+        catch { }
+    }
+
+    private void LoadRevoked()
+    {
+        try
+        {
+            if (!File.Exists(_revokedPath)) return;
+            var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(_revokedPath));
+            if (list == null) return;
+            foreach (var id in list)
+                if (!string.IsNullOrEmpty(id)) _revoked.Add(id);
+        }
         catch { }
     }
 
