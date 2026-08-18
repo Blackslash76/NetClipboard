@@ -401,7 +401,10 @@ public sealed class TrayContext : ApplicationContext
     {
         var trusted = _transport.TrustedPeers.Count;
         var state = L.T(_sharingEnabled ? "tray.stateActive" : "tray.statePaused");
-        var text = L.T("tray.tooltip", state, trusted);
+        // Tre cifre e non quattro: la build ".0" aggiunta dal compilatore non
+        // dice nulla e il tooltip ha poco spazio.
+        var version = Updater.CurrentVersion.ToString(3);
+        var text = L.T("tray.tooltip", version, state, trusted);
         _tray.Text = text.Length > 63 ? text[..63] : text; // limite di Windows per il tooltip della tray
         _tray.Icon = IconFactory.Create(_sharingEnabled);
     }

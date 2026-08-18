@@ -6,7 +6,7 @@
   "common.delete": "Elimina",
   "common.name": "Nome",
 
-  "tray.tooltip": "NetClipboard · {0} · {1} fidati",
+  "tray.tooltip": "NetClipboard v{0} · {1} · {2} trusted",
   "tray.stateActive": "attiva",
   "tray.statePaused": "in pausa",
   "tray.sharing": "Condivisione attiva",
@@ -32,7 +32,7 @@
   "msg.ownerNotAllowed": "Il permesso per questi file non è più valido: chiedi a {0} di rimandarli.",
   "msg.noFiles": "Nessun file ricevuto.",
   "msg.downloadFailed": "Download fallito: {0}",
-  "msg.noTrustedOnline": "Nessun dispositivo fidato in linea.",
+  "msg.noTrustedOnline": "Nessun dispositivo trusted in linea.",
   "msg.sentTo": "Inviato a {0} dispositivo/i.",
   "msg.sendingTo": "Invio a {0}… in attesa di risposta.",
   "msg.sendDelivered": "{0} ha accettato.",
@@ -86,7 +86,7 @@
   "devices.title": "NetClipboard · Dispositivi",
   "devices.self": "Questo dispositivo",
   "devices.selfLine": "{0}   ·   impronta {1}",
-  "devices.trusted": "Dispositivi fidati",
+  "devices.trusted": "Dispositivi trusted",
   "devices.discovered": "In rete — da accoppiare",
   "devices.fingerprint": "Impronta",
   "devices.address": "Indirizzo",
@@ -168,6 +168,6 @@
   "unit.gb": "GB",
   "unit.tb": "TB",
 
-  "error.notTrusted": "Dispositivo non fidato o handshake fallito.",
+  "error.notTrusted": "Dispositivo non trusted o handshake fallito.",
   "error.offerGone": "Offerta non più disponibile."
 }
