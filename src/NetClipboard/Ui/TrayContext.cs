@@ -536,12 +536,10 @@ public sealed class TrayContext : ApplicationContext
             return;
         }
 
-        var peers = _transport.Peers.ToList();
-        if (peers.Count == 0)
-        {
-            Balloon(L.T("app.name"), L.T("sendto.noPeers"), ToolTipIcon.Warning);
-            return;
-        }
+        // Solo gli esterni, come nel menu della tray: verso i propri dispositivi la
+        // clipboard viaggia gia' da sola, e proporli qui rimetterebbe in discussione
+        // la distinzione che tutto il resto dell'interfaccia tiene ferma.
+        var peers = _transport.Peers.Where(p => !p.Trusted).ToList();
 
         var fileCount = offer.Entries.Count(e => !e.IsDir);
         using var dlg = new RecipientDialog(peers, fileCount, FormatSize(offer.TotalSize));
