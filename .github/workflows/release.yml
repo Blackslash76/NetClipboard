@@ -1,8 +1,20 @@
 name: Release (gold)
 
 # Pubblica una nuova "gold": al push di un tag vX.Y.Z costruisce il single-file,
-# lo FIRMA con la chiave privata release (secret RELEASE_SIGNING_KEY_B64), genera
-# manifest.json e crea la GitHub Release con entrambi gli asset.
+# lo firma con Authenticode (SignPath Foundation), lo FIRMA con la chiave privata
+# release (secret RELEASE_SIGNING_KEY_B64), genera manifest.json, costruisce e
+# firma l'installer, e crea la GitHub Release con tutti gli asset.
+#
+# Le due firme sono cose diverse e servono entrambe:
+#  - Authenticode   -> Windows, SmartScreen e gli antivirus si fidano del binario;
+#  - chiave release -> l'app accetta l'aggiornamento solo se viene davvero da noi.
+#
+# ORDINE OBBLIGATORIO: manifest.json contiene lo SHA-256 dell'exe, quindi va
+# generato DOPO la firma Authenticode. Invertirli rompe l'auto-update di tutti
+# gli utenti gia' installati (hash non corrispondente -> update rifiutato).
+#
+# Finche' i secret/variables di SignPath non ci sono, i passi di firma si saltano
+# da soli e la release esce non firmata, esattamente come prima.
 
 on:
   push:
@@ -14,6 +26,9 @@ permissions:
 jobs:
   gold:
     runs-on: windows-latest
+    env:
+      # Solo un flag: il token vero resta nei secrets e lo vedono solo i passi che firmano.
+      SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,6 +56,41 @@ jobs:
           -p:AssemblyVersion=${{ steps.ver.outputs.version }}
           -p:FileVersion=${{ steps.ver.outputs.version }}
           -o publish
+
+      # ----- Firma Authenticode dell'eseguibile -----
+
+      - name: Carica l'exe da firmare
+        id: upload-exe
+        if: env.SIGNPATH_CONFIGURED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: netclipboard-exe-unsigned
+          path: publish/NetClipboard.exe
+          if-no-files-found: error
+
+      - name: Firma l'exe (SignPath)
+        if: env.SIGNPATH_CONFIGURED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: exe
+          github-artifact-id: ${{ steps.upload-exe.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-exe
+
+      - name: Sostituisci con l'exe firmato
+        if: env.SIGNPATH_CONFIGURED == 'true'
+        shell: pwsh
+        run: |
+          Copy-Item signed-exe\NetClipboard.exe publish\NetClipboard.exe -Force
+          $sig = Get-AuthenticodeSignature publish\NetClipboard.exe
+          Write-Host "Firma exe: $($sig.Status) - $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "Firma Authenticode non valida sull'exe: $($sig.Status)" }
+
+      # ----- manifest.json: DOPO la firma, perche' ne contiene lo SHA-256 -----
 
       - name: Firma e genera manifest.json
         shell: pwsh
@@ -77,6 +127,49 @@ jobs:
           $setup = "installer\NetClipboard-Setup-${{ steps.ver.outputs.version }}.exe"
           if (-not (Test-Path $setup)) { throw "Installer non generato" }
           Write-Host "Installer: $setup"
+
+      # ----- Firma Authenticode dell'installer -----
+      # E' il primo binario che l'utente scarica: se resta non firmato SmartScreen
+      # interviene comunque, per quanto l'exe contenuto sia a posto.
+
+      - name: Carica l'installer da firmare
+        id: upload-setup
+        if: env.SIGNPATH_CONFIGURED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: netclipboard-setup-unsigned
+          path: installer/NetClipboard-Setup-${{ steps.ver.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Firma l'installer (SignPath)
+        if: env.SIGNPATH_CONFIGURED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: setup
+          github-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-setup
+
+      - name: Sostituisci con l'installer firmato
+        if: env.SIGNPATH_CONFIGURED == 'true'
+        shell: pwsh
+        run: |
+          $name = "NetClipboard-Setup-${{ steps.ver.outputs.version }}.exe"
+          Copy-Item "signed-setup\$name" "installer\$name" -Force
+          $sig = Get-AuthenticodeSignature "installer\$name"
+          Write-Host "Firma installer: $($sig.Status) - $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "Firma Authenticode non valida sull'installer: $($sig.Status)" }
+
+      - name: Avviso se la release esce non firmata
+        if: env.SIGNPATH_CONFIGURED != 'true'
+        shell: pwsh
+        run: |
+          Write-Warning "SignPath non configurato: la release NON sara' firmata Authenticode."
+          Write-Warning "Servono il secret SIGNPATH_API_TOKEN e le variables SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG / SIGNPATH_POLICY_SLUG."
 
       - name: Crea GitHub Release
         uses: softprops/action-gh-release@v2
