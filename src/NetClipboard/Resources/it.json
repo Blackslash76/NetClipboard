@@ -128,6 +128,8 @@
   "history.unpin": "Rimuovi pin",
   "history.thisPc": "questo PC",
   "history.external": "↗ {0} (esterno)",
+  "history.used": "USATO",
+  "history.expired": "SCADUTO",
   "history.toDownload": "  ·  da scaricare",
   "history.meta": "{0}{1}  ·  {2}{3}",
 

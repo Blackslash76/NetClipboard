@@ -46,6 +46,13 @@ public sealed class HistoryItem
     /// </summary>
     public string Hash { get; set; } = "";
 
+    /// <summary>
+    /// Trasferimento ricevuto gia' incollato. La riga resta come traccia di cio'
+    /// che e' passato, ma non si riusa: e' un passaggio di consegne, non una
+    /// libreria.
+    /// </summary>
+    public bool Used { get; set; }
+
     [JsonIgnore]
     public bool IsLocal { get; set; }
 }
@@ -67,6 +74,16 @@ public sealed class ClipboardHistory
     /// </summary>
     public static TimeSpan ExternalLifetime(PayloadKind kind) =>
         kind == PayloadKind.Files ? TimeSpan.FromMinutes(3) : TimeSpan.FromMinutes(15);
+
+    /// <summary>Contenuto esterno oltre la sua finestra di vita.</summary>
+    public static bool IsExpired(HistoryItem item) =>
+        item.FromExternal && DateTime.UtcNow - item.TimestampUtc > ExternalLifetime(item.Kind);
+
+    /// <summary>
+    /// Riga non piu' utilizzabile: gia' consumata o scaduta. Resta in elenco,
+    /// spenta e marcata, finche' la normale conservazione non la porta via.
+    /// </summary>
+    public static bool IsSpent(HistoryItem item) => item.Used || IsExpired(item);
 
     private readonly AppConfig _config;
     private readonly List<HistoryItem> _items = new();
@@ -201,6 +218,19 @@ public sealed class ClipboardHistory
     }
 
     /// <summary>Registra i percorsi materializzati (dopo il download) su una voce file.</summary>
+    /// <summary>Segna un trasferimento come gia' incollato.</summary>
+    public void MarkUsed(string id)
+    {
+        lock (_gate)
+        {
+            var item = _items.FirstOrDefault(i => i.Id == id);
+            if (item == null || item.Used) return;
+            item.Used = true;
+            Persist();
+        }
+        Changed?.Invoke();
+    }
+
     public void SetMaterialized(string id, List<string> rootPaths)
     {
         lock (_gate)
@@ -222,12 +252,11 @@ public sealed class ClipboardHistory
 
         // Gli esterni scadono comunque, anche con la conservazione illimitata:
         // e' contenuto di passaggio, non cronologia propria.
-        bool Expired(HistoryItem i)
-        {
-            if (i.Pinned) return false;
-            if (i.FromExternal && now - i.TimestampUtc > ExternalLifetime(i.Kind)) return true;
-            return days > 0 && i.TimestampUtc < now.AddDays(-days);
-        }
+        // I contenuti esterni scaduti NON si tolgono: restano in elenco spenti e
+        // marcati, cosi' si capisce cosa e' passato e perche' non e' piu' usabile.
+        // Se ne occupa la normale conservazione, come per tutto il resto.
+        bool Expired(HistoryItem i) =>
+            !i.Pinned && days > 0 && i.TimestampUtc < now.AddDays(-days);
 
         var changed = false;
         lock (_gate)

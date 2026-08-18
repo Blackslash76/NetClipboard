@@ -247,15 +247,16 @@ public sealed class TrayContext : ApplicationContext
     }
 
     /// <summary>
-    /// Un trasferimento di file RICEVUTO si consuma incollandolo: la voce sparisce
-    /// dalla cronologia. E' un passaggio di consegne, non una libreria — e per gli
-    /// invii esterni il permesso di prelievo sarebbe comunque gia' scaduto poco dopo.
-    /// Le offerte proprie (file copiati su questo PC) restano dove sono.
+    /// Un trasferimento di file RICEVUTO si consuma incollandolo: la voce resta in
+    /// elenco ma segnata come usata, spenta e non riutilizzabile. E' un passaggio
+    /// di consegne, non una libreria — e per gli invii esterni il permesso di
+    /// prelievo sarebbe comunque gia' scaduto poco dopo.
+    /// Le offerte proprie (file copiati su questo PC) restano utilizzabili.
     /// </summary>
     private void ConsumeIfReceivedOffer(HistoryItem item)
     {
         if (item.Kind != PayloadKind.Files || item.IsLocalOffer) return;
-        _history.Remove(item.Id);
+        _history.MarkUsed(item.Id);
     }
 
     // ----- Finestra di avanzamento del trasferimento file -----

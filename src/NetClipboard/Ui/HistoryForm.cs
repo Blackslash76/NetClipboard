@@ -16,6 +16,7 @@ public sealed class HistoryForm : Form
     private static readonly Color Card = Color.FromArgb(32, 32, 40);
     private static readonly Color TextMain = Color.FromArgb(238, 238, 244);
     private static readonly Color TextMuted = Color.FromArgb(150, 152, 165);
+    private static readonly Color TextSpent = Color.FromArgb(104, 106, 118);
     private static readonly Color AccentA = Color.FromArgb(120, 92, 245);
     private static readonly Color AccentB = Color.FromArgb(56, 180, 220);
     private static readonly Color SelBg = Color.FromArgb(52, 50, 74);
@@ -29,6 +30,9 @@ public sealed class HistoryForm : Form
     private readonly ClipboardHistory _history;
     private readonly BufferedListBox _list;
     private readonly Dictionary<string, Image> _thumbCache = new();
+
+    /// <summary>Righe gia' ridisegnate come scadute: si smorzano una volta sola.</summary>
+    private readonly HashSet<string> _expired = new();
 
     /// <summary>
     /// Fa scorrere le torte di scadenza mentre la finestra e' aperta, e toglie le
@@ -84,18 +88,39 @@ public sealed class HistoryForm : Form
             // invalidarla tutta ogni secondo faceva sfarfallare l'elenco e perdere
             // selezione e posizione di scorrimento.
             var alive = false;
+            var expired = false;
+            var rows = new List<Rectangle>();
+
             for (var i = _list.Items.Count - 1; i >= 0; i--)
             {
                 if (_list.Items[i] is not HistoryItem it || !it.FromExternal) continue;
                 if (RemainingFraction(it) <= 0)
                 {
-                    _history.Remove(it.Id);
-                    _list.Items.RemoveAt(i);
+                    // Appena scaduta va ridisegnata una volta, per passare a spenta.
+                    if (!_expired.Add(it.Id)) continue;
+                    expired = true;
                     continue;
                 }
                 alive = true;
-                _list.Invalidate(_list.GetItemRectangle(i));
+                rows.Add(_list.GetItemRectangle(i));
             }
+
+            // Togliere una voce sposta le altre: li' serve una pittura normale,
+            // con la cancellazione al suo posto. Solo l'aggiornamento del solo
+            // anello puo' saltarla, ed e' quello che lampeggiava.
+            if (expired) _list.Invalidate();   // pittura normale: cambia l'aspetto di una riga
+
+            if (!expired && rows.Count > 0)
+            {
+                _list.SuppressErase = true;
+                try
+                {
+                    foreach (var r in rows) _list.Invalidate(r);
+                    _list.Update();   // dipinge subito, finche' la soppressione vale
+                }
+                finally { _list.SuppressErase = false; }
+            }
+
             if (!alive) _expiryTick.Stop();
         };
     }
@@ -182,7 +207,9 @@ public sealed class HistoryForm : Form
 
     private void ChooseSelected()
     {
-        if (_list.SelectedItem is HistoryItem item)
+        // Le righe spente restano selezionabili ma non fanno nulla: sono una
+        // traccia di cio' che e' passato, non un contenuto ancora incollabile.
+        if (_list.SelectedItem is HistoryItem item && !ClipboardHistory.IsSpent(item))
         {
             Hide();
             ItemChosen?.Invoke(item);
@@ -276,6 +303,7 @@ public sealed class HistoryForm : Form
         // scadenza che lo circonda: l'informazione sta addosso al contenuto,
         // invece che in un angolo staccato della riga.
         var icon = item.FromExternal ? Rectangle.Inflate(slot, -P(5), -P(5)) : slot;
+        var spent = ClipboardHistory.IsSpent(item);
         var thumb = GetThumb(item, icon.Width);
         if (thumb != null)
         {
@@ -296,14 +324,34 @@ public sealed class HistoryForm : Form
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
-        if (item.FromExternal)
+        // Anello solo finche' il conto alla rovescia ha senso: una riga spenta
+        // porta l'etichetta, non un anello vuoto.
+        if (item.FromExternal && !spent)
             DrawExpiryRing(g, slot, RemainingFraction(item));
+
+        // L'avatar di una riga spenta si smorza, cosi' la riga si legge come
+        // disattivata gia' dalla coda dell'occhio, prima di leggere l'etichetta.
+        if (spent)
+            using (var veil = new SolidBrush(Color.FromArgb(150, Card)))
+                g.FillRectangle(veil, slot);
 
         var textLeft = slot.Right + P(12);
         var textWidth = row.Right - textLeft - P(12);
 
+        // Etichetta di stato a destra: la riga resta visibile come traccia di cio'
+        // che e' passato, ma si vede che non e' piu' utilizzabile.
+        if (spent)
+        {
+            var tag = L.T(item.Used ? "history.used" : "history.expired");
+            var tagW = TextRenderer.MeasureText(tag, _fMeta).Width + P(4);
+            TextRenderer.DrawText(g, tag, _fMeta,
+                new Rectangle(row.Right - P(12) - tagW, row.Top + P(9), tagW, P(22)), TextSpent,
+                TextFormatFlags.Right | TextFormatFlags.NoPadding);
+            textWidth -= tagW + P(8);
+        }
+
         TextRenderer.DrawText(g, item.Preview, _fPreview,
-            new Rectangle(textLeft, row.Top + P(9), textWidth, P(22)), TextMain,
+            new Rectangle(textLeft, row.Top + P(9), textWidth, P(22)), spent ? TextSpent : TextMain,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
 
         var pin = item.Pinned ? "📌 " : "";
@@ -313,7 +361,7 @@ public sealed class HistoryForm : Form
         if (item.FromExternal) origin = L.T("history.external", origin);
         var meta = L.T("history.meta", pin, origin, LocalTime(item.TimestampUtc), toFetch);
         TextRenderer.DrawText(g, meta, _fMeta,
-            new Rectangle(textLeft, row.Top + P(33), textWidth, P(20)), TextMuted,
+            new Rectangle(textLeft, row.Top + P(33), textWidth, P(20)), spent ? TextSpent : TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
     }
 
@@ -417,10 +465,30 @@ public sealed class HistoryForm : Form
 
     private sealed class BufferedListBox : ListBox
     {
+        private const int WM_ERASEBKGND = 0x0014;
+
+        /// <summary>
+        /// Mentre e' true la cancellazione dello sfondo viene saltata.
+        ///
+        /// Il ListBox e' un controllo Win32: prima cancella la superficie, poi
+        /// chiede il disegno della riga. Due passate sullo schermo, cioe' un
+        /// lampeggio, che il doppio buffering di WinForms non copre perche' il
+        /// disegno non passa dal back buffer gestito. Si tiene attiva solo per il
+        /// ridisegno periodico dell'anello: le pitture normali cancellano come
+        /// sempre, cosi' l'area sotto l'ultima riga resta pulita.
+        /// </summary>
+        public bool SuppressErase;
+
         public BufferedListBox()
         {
             SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
             DoubleBuffered = true;
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (SuppressErase && m.Msg == WM_ERASEBKGND) { m.Result = 1; return; }
+            base.WndProc(ref m);
         }
     }
 }
