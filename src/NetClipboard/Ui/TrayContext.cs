@@ -31,6 +31,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _updateItem;
     private readonly ToolStripMenuItem _workItem;
     private readonly ToolStripMenuItem _sendToItem;
+    private readonly ToolStripMenuItem _sendNowItem;
 
     private System.Threading.Timer? _updateTimer;
     private string? _pendingUpdatePath;
@@ -77,6 +78,15 @@ public sealed class TrayContext : ApplicationContext
         _sharingItem = new ToolStripMenuItem(L.T("tray.sharing"), null, (_, _) => ToggleSharing()) { Checked = _sharingEnabled };
         menu.Items.Add(_sharingItem);
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.openHistory"), null, (_, _) => ShowHistory()));
+
+        // Compare solo a condivisione sospesa: con la condivisione attiva sarebbe
+        // una voce che rifa' quello che il programma sta gia' facendo da solo.
+        _sendNowItem = new ToolStripMenuItem(L.T("tray.sendNow"), null, (_, _) => SendCurrentClipboard())
+        {
+            Visible = !_sharingEnabled,
+        };
+        menu.Items.Add(_sendNowItem);
+
         _sendToItem = new ToolStripMenuItem(L.T("tray.sendTo"));
         menu.Items.Add(_sendToItem);
         menu.Items.Add(new ToolStripSeparator());
@@ -361,6 +371,7 @@ public sealed class TrayContext : ApplicationContext
     {
         _sharingEnabled = !_sharingEnabled;
         _sharingItem.Checked = _sharingEnabled;
+        _sendNowItem.Visible = !_sharingEnabled;
         _config.StartSharingEnabled = _sharingEnabled;
         _config.Save();
         UpdateTrayText();
@@ -421,48 +432,21 @@ public sealed class TrayContext : ApplicationContext
         _sendToItem.DropDownItems.Clear();
 
         var peers = _transport.Peers
-            .OrderByDescending(p => p.Trusted)
-            .ThenBy(p => p.Label, StringComparer.CurrentCultureIgnoreCase)
+            .Where(p => !p.Trusted)
+            .OrderBy(p => p.Label, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
 
-        _sendToItem.Text = L.T("tray.sendTo");
+        _sendToItem.Text = peers.Count == 0 ? L.T("tray.sendToNone") : L.T("tray.sendTo");
         _sendToItem.Enabled = peers.Count > 0;
         if (peers.Count == 0) return;
 
-        // Due gruppi con intestazione, non un elenco unico: e' qui che si vede la
-        // differenza fra i propri dispositivi, dove la clipboard viaggia da sola,
-        // e gli altri, a cui si manda qualcosa e che devono accettarlo.
-        var mine = peers.Where(p => p.Trusted).ToList();
-        var others = peers.Where(p => !p.Trusted).ToList();
-
-        if (mine.Count > 0)
-        {
-            AddMenuHeader(_sendToItem, L.T("tray.sendToMine"));
+        // Solo gli ALTRI: verso i propri dispositivi la clipboard viaggia gia' da
+        // sola, quindi un invio a mano non avrebbe senso e confonderebbe le due
+        // cose. Il caso in cui serve davvero — condivisione in pausa — ha una
+        // voce sua, che compare solo allora.
+        foreach (var p in peers.Where(p => !p.Trusted))
             _sendToItem.DropDownItems.Add(
-                new ToolStripMenuItem(L.T("tray.sendToAll"), null, (_, _) => SendCurrentClipboard()));
-            foreach (var p in mine)
-                _sendToItem.DropDownItems.Add(
-                    new ToolStripMenuItem("🔒 " + p.Label, null, (_, _) => _ = SendToAsync(p)));
-        }
-
-        if (others.Count > 0)
-        {
-            if (mine.Count > 0) _sendToItem.DropDownItems.Add(new ToolStripSeparator());
-            AddMenuHeader(_sendToItem, L.T("tray.sendToOthers"));
-            foreach (var p in others)
-                _sendToItem.DropDownItems.Add(
-                    new ToolStripMenuItem("• " + p.Label, null, (_, _) => _ = SendToAsync(p)));
-        }
-    }
-
-    /// <summary>Riga di intestazione dentro un menu: non cliccabile, serve solo a orientarsi.</summary>
-    private static void AddMenuHeader(ToolStripMenuItem parent, string text)
-    {
-        parent.DropDownItems.Add(new ToolStripMenuItem(text)
-        {
-            Enabled = false,
-            Font = new Font(SystemFonts.MenuFont!, FontStyle.Bold),
-        });
+                new ToolStripMenuItem(p.Label, null, (_, _) => _ = SendToAsync(p)));
     }
 
     private async Task SendToAsync(Peer peer)

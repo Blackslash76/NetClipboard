@@ -11,10 +11,9 @@
   "tray.statePaused": "in pausa",
   "tray.sharing": "Condivisione attiva",
   "tray.openHistory": "Apri cronologia  (Win+Alt+V)",
-  "tray.sendToAll": "Tutti i miei dispositivi",
-  "tray.sendToMine": "I MIEI DISPOSITIVI",
-  "tray.sendToOthers": "ALTRI IN RETE · chiedono conferma",
-  "tray.sendTo": "Invia a…",
+  "tray.sendNow": "Invia ora ai miei dispositivi",
+  "tray.sendTo": "Invia a un altro utente…",
+  "tray.sendToNone": "Invia a un altro utente… (nessuno in rete)",
   "tray.devicesAndPairing": "I miei dispositivi…",
   "tray.workSignedIn": "Account: {0}",
   "tray.workSignedOut": "Account aziendale: non connesso",
@@ -25,7 +24,7 @@
   "tray.exit": "Esci",
 
   "welcome.title": "Benvenuto in NetClipboard",
-  "welcome.body": "Apri \"Dispositivi e pairing\" per accoppiare i tuoi PC con un codice.",
+  "welcome.body": "Apri \"I miei dispositivi\" e aggiungi i tuoi PC con un codice: da lì in poi la clipboard li segue.",
 
   "msg.networkRestarted": "Rete riavviata.",
   "msg.contentGone": "Contenuto non più disponibile.",
@@ -104,7 +103,7 @@
   "devices.pairByIp": "Aggiungi per IP",
 
   "pairing.title": "Pairing",
-  "pairing.selectFirst": "Seleziona prima un dispositivo dall'elenco \"In rete\".",
+  "pairing.selectFirst": "Seleziona prima un dispositivo dall'elenco \"Altri in rete\".",
   "pairing.badIp": "Indirizzo IP non valido.",
   "pairing.busy": "Un pairing è già in corso.",
   "pairing.done": "Accoppiato con \"{0}\".",
