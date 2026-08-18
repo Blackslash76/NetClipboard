@@ -378,7 +378,7 @@ public sealed class TrayContext : ApplicationContext
                     Balloon(L.T("app.name"), L.T("msg.networkRestarted"));
                 },
                 OpenLogRequested = OpenLog,
-                CheckUpdatesRequested = () => _ = CheckForUpdateAsync(true),
+                CheckUpdatesRequested = () => CheckForUpdateAsync(true),
             };
             _settingsForm.Saved += () => { RestartNetwork(); UpdateTrayText(); };
         }
@@ -549,13 +549,29 @@ public sealed class TrayContext : ApplicationContext
         var path = await Updater.DownloadAsync(info, CancellationToken.None);
         if (path == null) { if (manual) Balloon(L.T("update.title"), L.T("update.downloadFailed"), ToolTipIcon.Warning); return; }
         _pendingUpdatePath = path;
-        if (_monitor.IsHandleCreated)
-            _monitor.BeginInvoke(() =>
+        if (!_monitor.IsHandleCreated) return;
+
+        _monitor.BeginInvoke(() =>
+        {
+            _updateItem.Text = L.T("tray.installUpdateVersion", info.Version);
+            _updateItem.Visible = true;
+
+            // Il controllo automatico non interrompe: avvisa e lascia la voce nel
+            // menu. Quello chiesto a mano invece propone subito, perche' chi ha
+            // appena premuto il pulsante sta aspettando una risposta.
+            if (!manual)
             {
-                _updateItem.Text = L.T("tray.installUpdateVersion", info.Version);
-                _updateItem.Visible = true;
-                _tray.ShowBalloonTip(4000, L.T("update.availableTitle"), L.T("update.availableBody", info.Version), ToolTipIcon.Info);
-            });
+                _tray.ShowBalloonTip(4000, L.T("update.availableTitle"),
+                    L.T("update.availableBody", info.Version), ToolTipIcon.Info);
+                return;
+            }
+
+            var answer = MessageBox.Show(
+                L.T("update.installNowBody", info.Version), L.T("update.availableTitle"),
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer == DialogResult.Yes) InstallPendingUpdate();
+            else Balloon(L.T("update.title"), L.T("update.availableBody", info.Version));
+        });
     }
 
     private void InstallPendingUpdate()

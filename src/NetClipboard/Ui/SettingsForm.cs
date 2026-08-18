@@ -110,7 +110,8 @@ public sealed class SettingsForm : ScaledForm
     // proprieta' pubblica non serializzabile fa scattare l'analizzatore WinForms.
     public Action? RestartNetworkRequested;
     public Action? OpenLogRequested;
-    public Action? CheckUpdatesRequested;
+    /// <summary>Attendibile: il download puo' durare, e il pulsante lo deve far vedere.</summary>
+    public Func<Task>? CheckUpdatesRequested;
 
     private void BuildControls()
     {
@@ -124,7 +125,21 @@ public sealed class SettingsForm : ScaledForm
         };
         _restartNetBtn.Click += (_, _) => RestartNetworkRequested?.Invoke();
         _logBtn.Click += (_, _) => OpenLogRequested?.Invoke();
-        _updatesBtn.Click += (_, _) => CheckUpdatesRequested?.Invoke();
+        _updatesBtn.Click += async (_, _) =>
+        {
+            if (CheckUpdatesRequested == null) return;
+
+            // Scaricare l'aggiornamento richiede tempo: senza un segno, il
+            // pulsante sembrerebbe non aver fatto nulla.
+            var normal = _updatesBtn.Text;
+            _updatesBtn.Enabled = false;
+            _updatesBtn.Text = L.T("settings.checkingUpdates");
+            try { await CheckUpdatesRequested(); }
+            finally
+            {
+                if (!IsDisposed) { _updatesBtn.Text = normal; _updatesBtn.Enabled = true; }
+            }
+        };
 
         _ok.Click += (_, _) => { SaveToConfig(); Saved?.Invoke(); Hide(); };
         _cancel.Click += (_, _) => { LoadFromConfig(); Hide(); };

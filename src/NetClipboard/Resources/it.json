@@ -53,6 +53,7 @@
   "update.downloadFailed": "Download fallito (vedi log).",
   "update.availableTitle": "Aggiornamento disponibile",
   "update.availableBody": "v{0} pronto. Installa dal menu.",
+  "update.installNowBody": "È disponibile la versione {0}, già scaricata e verificata.\n\nInstallarla e riavviare adesso?",
   "update.nonePending": "Nessun aggiornamento pronto.",
   "update.installFailed": "Installazione fallita (vedi log).",
 
@@ -78,6 +79,7 @@
   "settings.restartNetwork": "Riavvia rete",
   "settings.openLog": "Apri log",
   "settings.checkUpdates": "Aggiornamenti",
+  "settings.checkingUpdates": "Controllo…",
   "settings.firewallAdmin": "Regola firewall: puoi configurarla ora (sei admin).",
   "settings.firewallHint": "Se i PC non si vedono, configura la regola firewall (richiede admin).",
 
