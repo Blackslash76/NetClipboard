@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.IO;
 using NetClipboard.Core;
+using NetClipboard.Core.Identity;
 using NetClipboard.Core.Security;
 using NetClipboard.Net;
 using NetClipboard.Update;
@@ -17,6 +18,7 @@ public sealed class TrayContext : ApplicationContext
 {
     private readonly AppConfig _config;
     private readonly DeviceIdentity _identity;
+    private readonly EntraAuth _entra;
     private readonly TrustStore _trust;
     private readonly OfferStore _offerStore;
     private readonly ClipboardHistory _history;
@@ -28,6 +30,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _sharingItem;
     private readonly ToolStripMenuItem _devicesItem;
     private readonly ToolStripMenuItem _updateItem;
+    private readonly ToolStripMenuItem _workItem;
 
     private System.Threading.Timer? _updateTimer;
     private string? _pendingUpdatePath;
@@ -43,6 +46,7 @@ public sealed class TrayContext : ApplicationContext
 
         _identity = DeviceIdentity.LoadOrCreate();
         _trust = new TrustStore();
+        _entra = new EntraAuth(_config.EntraClientId, _config.EntraTenant);
 
         Log.Start($"NetClipboard v{Updater.CurrentVersion} · {_config.DisplayName} · " +
                   $"device {DeviceIdentity.ShortFingerprint(_identity.DeviceId)} · porta {_config.Port} · " +
@@ -80,6 +84,9 @@ public sealed class TrayContext : ApplicationContext
             Balloon(L.T("app.name"), L.T("msg.scanStarted"));
         }));
         menu.Items.Add(new ToolStripSeparator());
+        _workItem = new ToolStripMenuItem(L.T("tray.workSignedOut")) { Visible = _entra.IsConfigured };
+        menu.Items.Add(_workItem);
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.settings"), null, (_, _) => OpenSettings()));
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.firewall"), null, (_, _) => ConfigureFirewall()));
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.restartNetwork"), null, (_, _) =>
@@ -93,7 +100,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.exit"), null, (_, _) => ExitApp()));
-        menu.Opening += (_, _) => RefreshDevicesMenu();
+        menu.Opening += (_, _) => { RefreshDevicesMenu(); RefreshWorkMenu(); };
 
         _tray = new NotifyIcon
         {
@@ -113,6 +120,7 @@ public sealed class TrayContext : ApplicationContext
 
         UpdateTrayText();
         StartNetwork();
+        StartWorkSignIn();
 
         if (_trust.All.Count == 0)
             _monitor.BeginInvoke(() =>
@@ -385,6 +393,59 @@ public sealed class TrayContext : ApplicationContext
         var text = L.T("tray.tooltip", state, trusted);
         _tray.Text = text.Length > 63 ? text[..63] : text; // limite di Windows per il tooltip della tray
         _tray.Icon = IconFactory.Create(_sharingEnabled);
+    }
+
+    // ----- Identità aziendale (Entra ID) -----
+
+    /// <summary>
+    /// Accesso silenzioso all'avvio: su un PC aggiunto a Entra riesce senza
+    /// mostrare nulla. Se non riesce non è un errore — l'app funziona lo stesso
+    /// con la sola identità di dispositivo, e l'utente può accedere dalla tray.
+    /// </summary>
+    private void StartWorkSignIn()
+    {
+        if (!_entra.IsConfigured) return;
+
+        // La finestra nascosta del monitor fa da genitore al popup del broker:
+        // WAM pretende un handle di questo processo, non la finestra in primo piano.
+        _entra.ParentWindow = () => _monitor.Handle;
+        _entra.Changed += _ =>
+        {
+            if (_monitor.IsHandleCreated) _monitor.BeginInvoke(UpdateTrayText);
+        };
+
+        if (_config.EntraSignInAtStartup)
+            _ = _entra.SignInSilentAsync();
+    }
+
+    private void RefreshWorkMenu()
+    {
+        _workItem.Visible = _entra.IsConfigured;
+        if (!_entra.IsConfigured) return;
+
+        _workItem.DropDownItems.Clear();
+        var me = _entra.Current;
+        if (me == null)
+        {
+            _workItem.Text = L.T("tray.workSignedOut");
+            _workItem.DropDownItems.Add(
+                new ToolStripMenuItem(L.T("tray.workSignIn"), null, (_, _) => _ = WorkSignInAsync()));
+            return;
+        }
+
+        _workItem.Text = L.T("tray.workSignedIn", me.Label);
+        _workItem.DropDownItems.Add(new ToolStripMenuItem(me.UserPrincipalName) { Enabled = false });
+        _workItem.DropDownItems.Add(new ToolStripSeparator());
+        _workItem.DropDownItems.Add(
+            new ToolStripMenuItem(L.T("tray.workSignOut"), null, (_, _) => _ = _entra.SignOutAsync()));
+    }
+
+    private async Task WorkSignInAsync()
+    {
+        var me = await _entra.SignInInteractiveAsync();
+        Balloon(L.T("app.name"),
+            me != null ? L.T("msg.workSignedIn", me.Label) : L.T("msg.workSignInFailed"),
+            me != null ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
     // ----- Auto-update -----

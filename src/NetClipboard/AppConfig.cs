@@ -47,6 +47,23 @@ public sealed class AppConfig
     /// <summary>Cache degli IP dei peer già visti: al riavvio si ripingano (niente scan).</summary>
     public List<string> KnownPeerIps { get; set; } = new();
 
+    // ----- Identità aziendale (Microsoft Entra ID) -----
+
+    /// <summary>
+    /// ID dell'applicazione registrata nel tenant (GUID). Vuoto = funzione
+    /// disattivata: l'app lavora con la sola identità di dispositivo, come prima.
+    /// </summary>
+    public string EntraClientId { get; set; } = "";
+
+    /// <summary>
+    /// Tenant a cui rivolgersi: un GUID (o dominio) per limitarsi alla propria
+    /// organizzazione, "organizations" per un qualsiasi account aziendale.
+    /// </summary>
+    public string EntraTenant { get; set; } = "organizations";
+
+    /// <summary>Tenta l'accesso silenzioso all'avvio (nessuna finestra: o riesce o si prosegue senza).</summary>
+    public bool EntraSignInAtStartup { get; set; } = true;
+
     // ----- Percorsi -----
 
     public static string AppDataDir
