@@ -8,11 +8,22 @@
     <Nullable>enable</Nullable>
     <RootNamespace>NetClipboard</RootNamespace>
     <AssemblyName>NetClipboard</AssemblyName>
-    <Version>2.0.7</Version>
+    <Version>2.1.0</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Product>NetClipboard</Product>
     <Description>Clipboard condivisa peer-to-peer sulla LAN</Description>
     <ApplicationIcon>appicon.ico</ApplicationIcon>
+
+    <!-- Metadati completi nella risorsa di versione dell'eseguibile. Un binario
+         non firmato e privo di dati sull'autore e' uno dei segnali che fanno
+         alzare il punteggio alle euristiche antivirus al momento del download. -->
+    <Company>Francesco Papeo</Company>
+    <Authors>Francesco Papeo</Authors>
+    <Copyright>Copyright (c) 2026 Francesco Papeo</Copyright>
+    <AssemblyTitle>NetClipboard</AssemblyTitle>
+    <NeutralLanguage>it-IT</NeutralLanguage>
+    <PackageProjectUrl>https://github.com/Blackslash76/NetClipboard</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Blackslash76/NetClipboard</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>
