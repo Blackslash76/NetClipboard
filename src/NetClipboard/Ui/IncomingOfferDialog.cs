@@ -70,8 +70,13 @@ public sealed class IncomingOfferDialog : ScaledForm
             AutoEllipsis = true,
         };
 
-        // Per i file il contenuto non e' ancora arrivato: si dichiara che sara'
-        // controllato, invece di fingere che lo sia gia' stato.
+        // Tre livelli, dal piu' forte al piu' debole, e nessuno di piu' di quanto
+        // si sappia davvero:
+        //  1. il contenuto e' stato analizzato qui e risulta pulito;
+        //  2. non e' ancora arrivato (i file viaggiano dopo), ma lo sara';
+        //  3. non possiamo dare un verdetto sul singolo contenuto, pero' Windows
+        //     conferma che un antivirus e' attivo e controlla cio' che viene
+        //     scritto su disco. E' meno, ma e' vero.
         if (offer.Scan == ScanVerdict.Clean)
         {
             _scan.Text = L.T("incoming.verified");
@@ -81,6 +86,11 @@ public sealed class IncomingOfferDialog : ScaledForm
         {
             _scan.Text = L.T("incoming.willVerify");
             _scan.ForeColor = Color.FromArgb(150, 152, 165);
+        }
+        else if (SystemProtection.Antivirus == ProtectionState.Active)
+        {
+            _scan.Text = L.T("incoming.systemProtected");
+            _scan.ForeColor = Color.FromArgb(120, 175, 235);
         }
         else
         {

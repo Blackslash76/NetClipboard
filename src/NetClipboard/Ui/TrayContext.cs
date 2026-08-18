@@ -270,7 +270,7 @@ public sealed class TrayContext : ApplicationContext
             // Qui i byte esistono davvero: e' il momento in cui l'analisi ha senso.
             // Se l'antivirus riconosce qualcosa, i file non arrivano alla clipboard
             // e vengono tolti dal disco.
-            if (item.FromExternal && !await VerifyDownloadedAsync(roots, destDir)) return;
+            if (item.FromExternal && !await VerifyDownloadedAsync(roots, destDir, item.FileCount)) return;
 
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
@@ -309,7 +309,7 @@ public sealed class TrayContext : ApplicationContext
     /// dice, perche' e' l'informazione che chi riceve stava aspettando; se non lo
     /// sono li cancella e avvisa.
     /// </summary>
-    private async Task<bool> VerifyDownloadedAsync(IReadOnlyList<string> roots, string destDir)
+    private async Task<bool> VerifyDownloadedAsync(IReadOnlyList<string> roots, string destDir, int expectedFiles)
     {
         var files = new List<string>();
         foreach (var r in roots)
@@ -319,6 +319,19 @@ public sealed class TrayContext : ApplicationContext
                 try { files.AddRange(Directory.EnumerateFiles(r, "*", SearchOption.AllDirectories)); }
                 catch { }
         }
+
+        // Se ne sono arrivati meno di quanti ne erano annunciati, qualcuno li ha
+        // tolti mentre venivano scritti: quasi sempre e' la protezione in tempo
+        // reale dell'antivirus, che agisce anche quando non risponde ad AMSI.
+        // E' un segnale OSSERVATO, non una dichiarazione di nessuno.
+        if (expectedFiles > 0 && files.Count < expectedFiles)
+        {
+            var missing = expectedFiles - files.Count;
+            Log.Write($"[Antimalware] {missing} file su {expectedFiles} spariti durante lo scaricamento: rimossi dall'antivirus.");
+            Balloon(L.T("app.name"), L.T("msg.filesRemovedByAv", missing), ToolTipIcon.Warning);
+            if (files.Count == 0) return false;
+        }
+
         if (files.Count == 0) return true;
 
         var result = await Task.Run(() =>
@@ -336,6 +349,8 @@ public sealed class TrayContext : ApplicationContext
 
         if (result.Verdict == ScanVerdict.Clean)
             Balloon(L.T("app.name"), L.T("msg.filesVerified"));
+        else if (SystemProtection.Antivirus == ProtectionState.Active)
+            Balloon(L.T("app.name"), L.T("msg.filesSystemChecked"));
         return true;
     }
 
