@@ -28,7 +28,6 @@ public sealed class TrayContext : ApplicationContext
     private readonly HistoryForm _historyForm;
     private readonly NotifyIcon _tray;
     private readonly ToolStripMenuItem _sharingItem;
-    private readonly ToolStripMenuItem _devicesItem;
     private readonly ToolStripMenuItem _updateItem;
     private readonly ToolStripMenuItem _workItem;
     private readonly ToolStripMenuItem _sendToItem;
@@ -71,40 +70,25 @@ public sealed class TrayContext : ApplicationContext
 
         _sharingEnabled = _config.StartSharingEnabled;
 
+        // Menu volutamente corto: qui stanno solo le azioni di tutti i giorni.
+        // Diagnostica, rete, firewall e aggiornamenti sono in Impostazioni; la
+        // ricerca in rete sta in "Dispositivi e pairing", dove serve davvero.
         var menu = new ContextMenuStrip();
         _sharingItem = new ToolStripMenuItem(L.T("tray.sharing"), null, (_, _) => ToggleSharing()) { Checked = _sharingEnabled };
         menu.Items.Add(_sharingItem);
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.openHistory"), null, (_, _) => ShowHistory()));
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.sendNow"), null, (_, _) => SendCurrentClipboard()));
         _sendToItem = new ToolStripMenuItem(L.T("tray.sendTo"));
         menu.Items.Add(_sendToItem);
         menu.Items.Add(new ToolStripSeparator());
-        _devicesItem = new ToolStripMenuItem(L.T("tray.devices")) { Enabled = false };
-        menu.Items.Add(_devicesItem);
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.devicesAndPairing"), null, (_, _) => OpenDevices()));
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.scan"), null, (_, _) =>
-        {
-            _transport.ScanOnDemand();
-            Balloon(L.T("app.name"), L.T("msg.scanStarted"));
-        }));
-        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem(L.T("tray.settings"), null, (_, _) => OpenSettings()));
         _workItem = new ToolStripMenuItem(L.T("tray.workSignedOut")) { Visible = _entra.IsConfigured };
         menu.Items.Add(_workItem);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.settings"), null, (_, _) => OpenSettings()));
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.firewall"), null, (_, _) => ConfigureFirewall()));
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.restartNetwork"), null, (_, _) =>
-        {
-            RestartNetwork();
-            Balloon(L.T("app.name"), L.T("msg.networkRestarted"));
-        }));
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.openLog"), null, (_, _) => OpenLog()));
-        menu.Items.Add(new ToolStripMenuItem(L.T("tray.checkUpdates"), null, (_, _) => _ = CheckForUpdateAsync(true)));
-        _updateItem = new ToolStripMenuItem(L.T("tray.installUpdate"), null, (_, _) => InstallPendingUpdate()) { Visible = false };
+        _updateItem = new ToolStripMenuItem(L.T("tray.installUpdateVersion"), null, (_, _) => InstallPendingUpdate()) { Visible = false };
         menu.Items.Add(_updateItem);
-        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.exit"), null, (_, _) => ExitApp()));
-        menu.Opening += (_, _) => { RefreshDevicesMenu(); RefreshSendToMenu(); RefreshWorkMenu(); };
+        menu.Opening += (_, _) => { RefreshSendToMenu(); RefreshWorkMenu(); };
 
         _tray = new NotifyIcon
         {
@@ -213,6 +197,7 @@ public sealed class TrayContext : ApplicationContext
             {
                 ApplyFiles(item.LocalRootPaths);
                 PasteToTarget(target);
+                ConsumeIfReceivedOffer(item);
                 return;
             }
             if (item.IsLocalOffer) { Balloon(L.T("app.name"), L.T("msg.originalsGone"), ToolTipIcon.Warning); return; }
@@ -245,6 +230,7 @@ public sealed class TrayContext : ApplicationContext
             _history.SetMaterialized(item.Id, roots);
             ApplyFiles(roots);
             PasteToTarget(target);
+            ConsumeIfReceivedOffer(item);
         }
         catch (OperationCanceledException)
         {
@@ -258,6 +244,18 @@ public sealed class TrayContext : ApplicationContext
         {
             CloseTransfer(ui);
         }
+    }
+
+    /// <summary>
+    /// Un trasferimento di file RICEVUTO si consuma incollandolo: la voce sparisce
+    /// dalla cronologia. E' un passaggio di consegne, non una libreria — e per gli
+    /// invii esterni il permesso di prelievo sarebbe comunque gia' scaduto poco dopo.
+    /// Le offerte proprie (file copiati su questo PC) restano dove sono.
+    /// </summary>
+    private void ConsumeIfReceivedOffer(HistoryItem item)
+    {
+        if (item.Kind != PayloadKind.Files || item.IsLocalOffer) return;
+        _history.Remove(item.Id);
     }
 
     // ----- Finestra di avanzamento del trasferimento file -----
@@ -371,7 +369,16 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_settingsForm == null || _settingsForm.IsDisposed)
         {
-            _settingsForm = new SettingsForm(_config);
+            _settingsForm = new SettingsForm(_config)
+            {
+                RestartNetworkRequested = () =>
+                {
+                    RestartNetwork();
+                    Balloon(L.T("app.name"), L.T("msg.networkRestarted"));
+                },
+                OpenLogRequested = OpenLog,
+                CheckUpdatesRequested = () => _ = CheckForUpdateAsync(true),
+            };
             _settingsForm.Saved += () => { RestartNetwork(); UpdateTrayText(); };
         }
         ShowTool(_settingsForm);
@@ -387,20 +394,6 @@ public sealed class TrayContext : ApplicationContext
     private void OnPeersChanged()
     {
         if (_monitor.IsHandleCreated) _monitor.BeginInvoke(UpdateTrayText);
-    }
-
-    private void RefreshDevicesMenu()
-    {
-        _devicesItem.DropDownItems.Clear();
-        var peers = _transport.Peers.OrderByDescending(p => p.Trusted).ThenBy(p => p.Name).ToList();
-        if (peers.Count == 0) { _devicesItem.Text = L.T("tray.devicesNone"); return; }
-        _devicesItem.Text = L.T("tray.devicesCount", peers.Count(p => p.Trusted), peers.Count);
-        foreach (var p in peers)
-        {
-            var mark = p.Trusted ? "🔒 " : "• "; // simboli, non testo da tradurre
-            _devicesItem.DropDownItems.Add(
-                new ToolStripMenuItem(mark + L.T("tray.peerLine", p.Name, p.Address)) { Enabled = false });
-        }
     }
 
     private void UpdateTrayText()
@@ -428,14 +421,19 @@ public sealed class TrayContext : ApplicationContext
             .ThenBy(p => p.Label, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
 
+        _sendToItem.Text = L.T("tray.sendTo");
         _sendToItem.Enabled = peers.Count > 0;
-        if (peers.Count == 0)
+        if (peers.Count == 0) return;
+
+        // L'invio a tutta la propria mesh era una voce a se' nel menu: qui sta
+        // meglio, in cima alla stessa lista di destinatari.
+        if (peers.Any(p => p.Trusted))
         {
-            _sendToItem.Text = L.T("tray.sendToNone");
-            return;
+            _sendToItem.DropDownItems.Add(
+                new ToolStripMenuItem(L.T("tray.sendToAll"), null, (_, _) => SendCurrentClipboard()));
+            _sendToItem.DropDownItems.Add(new ToolStripSeparator());
         }
 
-        _sendToItem.Text = L.T("tray.sendTo");
         foreach (var p in peers)
         {
             var mark = p.Trusted ? "🔒 " : "• "; // simboli, non testo da tradurre

@@ -38,6 +38,12 @@ public sealed class SettingsForm : ScaledForm
     private readonly TextBox _manualPeers = new() { Multiline = true, ScrollBars = ScrollBars.Vertical };
     private readonly Label _firewall = new() { AutoSize = true };
     private readonly Button _firewallBtn = new();
+
+    // Manutenzione: voci tolte dal menu della tray, che deve restare corto.
+    private readonly Label _lblMaintenance = new();
+    private readonly Button _restartNetBtn = new();
+    private readonly Button _logBtn = new();
+    private readonly Button _updatesBtn = new();
     private readonly Button _ok = new();
     private readonly Button _cancel = new();
 
@@ -87,6 +93,10 @@ public sealed class SettingsForm : ScaledForm
         _lblPeers.Text = L.T("settings.manualPeers");
         _lblPeersHint.Text = L.T("settings.manualPeersHint");
         _firewallBtn.Text = L.T("settings.firewallButton");
+        _lblMaintenance.Text = L.T("settings.maintenance");
+        _restartNetBtn.Text = L.T("settings.restartNetwork");
+        _logBtn.Text = L.T("settings.openLog");
+        _updatesBtn.Text = L.T("settings.checkUpdates");
         _ok.Text = L.T("common.save");
         _cancel.Text = L.T("common.cancel");
         UpdateFirewallLabel();
@@ -94,6 +104,13 @@ public sealed class SettingsForm : ScaledForm
 
     /// <summary>Scatta quando l'utente salva le impostazioni.</summary>
     public event Action? Saved;
+
+    // Le azioni vivono nella tray (che possiede rete, log e updater): qui ci sono
+    // solo i bottoni che le richiamano. Campi e non proprieta': su un Form una
+    // proprieta' pubblica non serializzabile fa scattare l'analizzatore WinForms.
+    public Action? RestartNetworkRequested;
+    public Action? OpenLogRequested;
+    public Action? CheckUpdatesRequested;
 
     private void BuildControls()
     {
@@ -105,6 +122,10 @@ public sealed class SettingsForm : ScaledForm
                 FirewallHelper.RequestInstallElevated();
             UpdateFirewallLabel();
         };
+        _restartNetBtn.Click += (_, _) => RestartNetworkRequested?.Invoke();
+        _logBtn.Click += (_, _) => OpenLogRequested?.Invoke();
+        _updatesBtn.Click += (_, _) => CheckUpdatesRequested?.Invoke();
+
         _ok.Click += (_, _) => { SaveToConfig(); Saved?.Invoke(); Hide(); };
         _cancel.Click += (_, _) => { LoadFromConfig(); Hide(); };
         AcceptButton = _ok;
@@ -122,6 +143,7 @@ public sealed class SettingsForm : ScaledForm
             _lblUpdateUrl, _updateUrl,
             _lblPeers, _lblPeersHint, _manualPeers,
             _firewall, _firewallBtn,
+            _lblMaintenance, _restartNetBtn, _logBtn, _updatesBtn,
             _ok, _cancel,
         });
     }
@@ -173,6 +195,17 @@ public sealed class SettingsForm : ScaledForm
         y += 36;
         _manualPeers.SetBounds(P(Pad), P(y), P(ClientW - 2 * Pad), P(70));
         y += 80;
+
+        // Tre bottoni in fila, stessa larghezza, sull'intera riga utile.
+        _lblMaintenance.SetBounds(P(Pad), P(y + 6), P(LabelW), P(20));
+        var btnW = (ClientW - CtlX - Pad - 16) / 3;
+        var bx = CtlX;
+        foreach (var b in new[] { _restartNetBtn, _logBtn, _updatesBtn })
+        {
+            b.SetBounds(P(bx), P(y), P(btnW), P(28));
+            bx += btnW + 8;
+        }
+        y += 40;
 
         _firewall.MaximumSize = new Size(P(ClientW - 2 * Pad - 150), 0);
         _firewall.Location = new Point(P(Pad), P(y + 4));

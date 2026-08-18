@@ -78,14 +78,25 @@ public sealed class HistoryForm : Form
         _expiryTick.Tick += (_, _) =>
         {
             if (!Visible) { _expiryTick.Stop(); return; }
-            var hadExternal = false;
-            foreach (var o in _list.Items)
-                if (o is HistoryItem { FromExternal: true }) { hadExternal = true; break; }
-            if (!hadExternal) { _expiryTick.Stop(); return; }
 
-            _history.PurgeExpired(); // se qualcosa e' scaduto, Reload lo togliera'
-            if (_list.Items.Count != _history.Items.Count) Reload();
-            else _list.Invalidate();
+            // Si tocca SOLO cio' che cambia: le righe scadute si tolgono in posto e
+            // delle altre si ridisegna il singolo rettangolo. Ricostruire la lista o
+            // invalidarla tutta ogni secondo faceva sfarfallare l'elenco e perdere
+            // selezione e posizione di scorrimento.
+            var alive = false;
+            for (var i = _list.Items.Count - 1; i >= 0; i--)
+            {
+                if (_list.Items[i] is not HistoryItem it || !it.FromExternal) continue;
+                if (RemainingFraction(it) <= 0)
+                {
+                    _history.Remove(it.Id);
+                    _list.Items.RemoveAt(i);
+                    continue;
+                }
+                alive = true;
+                _list.Invalidate(_list.GetItemRectangle(i));
+            }
+            if (!alive) _expiryTick.Stop();
         };
     }
 
@@ -259,8 +270,13 @@ public sealed class HistoryForm : Form
                 g.FillRoundedRect(accent, new Rectangle(row.Left, row.Top + P(6), P(3), row.Height - P(12)), P(2));
 
         var iconSz = P(40);
-        var icon = new Rectangle(row.Left + P(12), row.Top + (row.Height - iconSz) / 2, iconSz, iconSz);
-        var thumb = GetThumb(item, iconSz);
+        var slot = new Rectangle(row.Left + P(12), row.Top + (row.Height - iconSz) / 2, iconSz, iconSz);
+
+        // Sugli esterni l'avatar si stringe per lasciare posto all'anello di
+        // scadenza che lo circonda: l'informazione sta addosso al contenuto,
+        // invece che in un angolo staccato della riga.
+        var icon = item.FromExternal ? Rectangle.Inflate(slot, -P(5), -P(5)) : slot;
+        var thumb = GetThumb(item, icon.Width);
         if (thumb != null)
         {
             using var clip = new GraphicsPath();
@@ -280,22 +296,15 @@ public sealed class HistoryForm : Form
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
-        var textLeft = icon.Right + P(12);
+        if (item.FromExternal)
+            DrawExpiryRing(g, slot, RemainingFraction(item));
+
+        var textLeft = slot.Right + P(12);
         var textWidth = row.Right - textLeft - P(12);
 
         TextRenderer.DrawText(g, item.Preview, _fPreview,
             new Rectangle(textLeft, row.Top + P(9), textWidth, P(22)), TextMain,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
-
-        // Contenuto arrivato da un utente esterno: la torta a destra dice quanto
-        // manca alla scadenza, cosi' si capisce a colpo d'occhio che e' di passaggio.
-        if (item.FromExternal)
-        {
-            var pieSz = P(16);
-            var pie = new Rectangle(row.Right - P(12) - pieSz, row.Top + (row.Height - pieSz) / 2, pieSz, pieSz);
-            DrawExpiryPie(g, pie, RemainingFraction(item));
-            textWidth -= pieSz + P(10);
-        }
 
         var pin = item.Pinned ? "📌 " : "";
         var toFetch = item.Kind == PayloadKind.Files && !item.IsLocalOffer
@@ -318,23 +327,28 @@ public sealed class HistoryForm : Form
     }
 
     /// <summary>
-    /// Torta di scadenza: si svuota in senso orario col passare del tempo e vira
-    /// all'arancione sull'ultimo quarto, quando conviene sbrigarsi.
+    /// Anello di scadenza attorno all'avatar: si consuma in senso orario col tempo
+    /// residuo e vira all'arancione sull'ultimo quarto, quando conviene sbrigarsi.
     /// </summary>
-    private static void DrawExpiryPie(Graphics g, Rectangle box, double fraction)
+    private static void DrawExpiryRing(Graphics g, Rectangle box, double fraction)
     {
         var color = fraction <= 0.25
             ? Color.FromArgb(240, 150, 60)
             : Color.FromArgb(110, 170, 240);
 
-        using (var track = new Pen(Color.FromArgb(70, 90, 90, 110), Math.Max(1f, box.Width / 10f)))
-            g.DrawEllipse(track, box);
+        var thickness = Math.Max(2f, box.Width / 14f);
+        var arc = Rectangle.Inflate(box, (int)(-thickness / 2), (int)(-thickness / 2));
 
-        if (fraction <= 0) return;
         var saved = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var fill = new SolidBrush(color))
-            g.FillPie(fill, box, -90f, (float)(360.0 * fraction));
+
+        using (var track = new Pen(Color.FromArgb(60, 130, 135, 155), thickness))
+            g.DrawEllipse(track, arc);
+
+        if (fraction > 0)
+            using (var pen = new Pen(color, thickness) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                g.DrawArc(pen, arc, -90f, (float)(360.0 * fraction));
+
         g.SmoothingMode = saved;
     }
 

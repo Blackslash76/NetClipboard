@@ -280,8 +280,7 @@ public sealed class ClipboardHistory
             var item = _items.FirstOrDefault(i => i.Id == id);
             if (item == null) return;
             _items.Remove(item);
-            var key = _hashToId.FirstOrDefault(kv => kv.Value == id).Key;
-            if (key != null) _hashToId.Remove(key);
+            Deindex(item);
             DeleteBlob(item);
             Persist();
             Changed?.Invoke();
