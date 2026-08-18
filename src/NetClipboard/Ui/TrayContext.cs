@@ -66,7 +66,7 @@ public sealed class TrayContext : ApplicationContext
             OfferConfirm = ShowIncomingOfferDialog,
         };
         _discovery = new PeerDiscovery(_config, ip => _transport.AddCandidate(ip));
-        _historyForm = new HistoryForm(_history);
+        _historyForm = new HistoryForm(_history, _config);
 
         _sharingEnabled = _config.StartSharingEnabled;
 

@@ -24,6 +24,17 @@ public sealed class AppConfig
     /// <summary>Numero massimo di elementi tenuti nella cronologia.</summary>
     public int HistorySize { get; set; } = 30;
 
+    /// <summary>
+    /// Righe mostrate insieme nel pannello della cronologia, e quindi la sua
+    /// altezza. Poche righe rendono il pannello un menu che non copre lo schermo;
+    /// alzarlo serve a chi tiene molta roba a portata di mano.
+    /// </summary>
+    public int HistoryVisibleRows { get; set; } = 4;
+
+    /// <summary>Estremi accettati per <see cref="HistoryVisibleRows"/>.</summary>
+    public const int MinVisibleRows = 3;
+    public const int MaxVisibleRows = 8;
+
     /// <summary>Giorni di conservazione degli elementi non fissati (0 = illimitato).</summary>
     public int HistoryMaxAgeDays { get; set; } = 7;
 

@@ -61,6 +61,7 @@
   "settings.name": "Nome di questo PC",
   "settings.port": "Porta (TCP/UDP)",
   "settings.historySize": "Elementi in cronologia",
+  "settings.visibleRows": "Righe visibili nel pannello",
   "settings.maxAge": "Conservazione (giorni, 0=∞)",
   "settings.maxSize": "Dimensione max (MB)",
   "settings.share": "Condividi",

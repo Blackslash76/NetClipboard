@@ -26,6 +26,11 @@ public sealed class SettingsForm : ScaledForm
     private readonly TextBox _name = new();
     private readonly NumericUpDown _port = new() { Minimum = 1024, Maximum = 65535 };
     private readonly NumericUpDown _historySize = new() { Minimum = 5, Maximum = 200 };
+    private readonly NumericUpDown _visibleRows = new()
+    {
+        Minimum = AppConfig.MinVisibleRows,
+        Maximum = AppConfig.MaxVisibleRows,
+    };
     private readonly NumericUpDown _maxAgeDays = new() { Minimum = 0, Maximum = 3650 };
     private readonly NumericUpDown _maxMb = new() { Minimum = 1, Maximum = 2048 };
     private readonly CheckBox _shareText = new() { AutoSize = true };
@@ -50,6 +55,7 @@ public sealed class SettingsForm : ScaledForm
     private readonly Label _lblName = new();
     private readonly Label _lblPort = new();
     private readonly Label _lblHistory = new();
+    private readonly Label _lblVisibleRows = new();
     private readonly Label _lblAge = new();
     private readonly Label _lblSize = new();
     private readonly Label _lblShare = new();
@@ -79,6 +85,7 @@ public sealed class SettingsForm : ScaledForm
         _lblName.Text = L.T("settings.name");
         _lblPort.Text = L.T("settings.port");
         _lblHistory.Text = L.T("settings.historySize");
+        _lblVisibleRows.Text = L.T("settings.visibleRows");
         _lblAge.Text = L.T("settings.maxAge");
         _lblSize.Text = L.T("settings.maxSize");
         _lblShare.Text = L.T("settings.share");
@@ -151,6 +158,7 @@ public sealed class SettingsForm : ScaledForm
             _lblName, _name,
             _lblPort, _port,
             _lblHistory, _historySize,
+            _lblVisibleRows, _visibleRows,
             _lblAge, _maxAgeDays,
             _lblSize, _maxMb,
             _lblShare, _shareText, _shareImages, _shareFiles,
@@ -182,6 +190,7 @@ public sealed class SettingsForm : ScaledForm
         Row(_lblName, _name, fieldW);
         Row(_lblPort, _port, 110);
         Row(_lblHistory, _historySize, 110);
+        Row(_lblVisibleRows, _visibleRows, 110);
         Row(_lblAge, _maxAgeDays, 110);
         Row(_lblSize, _maxMb, 110);
 
@@ -267,6 +276,8 @@ public sealed class SettingsForm : ScaledForm
         _name.Text = _config.DisplayName;
         _port.Value = Math.Clamp(_config.Port, 1024, 65535);
         _historySize.Value = Math.Clamp(_config.HistorySize, 5, 200);
+        _visibleRows.Value = Math.Clamp(_config.HistoryVisibleRows,
+                                        AppConfig.MinVisibleRows, AppConfig.MaxVisibleRows);
         _maxAgeDays.Value = Math.Clamp(_config.HistoryMaxAgeDays, 0, 3650);
         _maxMb.Value = Math.Clamp(_config.MaxTransferMb, 1, 2048);
         _shareText.Checked = _config.ShareText;
@@ -284,6 +295,7 @@ public sealed class SettingsForm : ScaledForm
         _config.DisplayName = string.IsNullOrWhiteSpace(_name.Text) ? Environment.MachineName : _name.Text.Trim();
         _config.Port = (int)_port.Value;
         _config.HistorySize = (int)_historySize.Value;
+        _config.HistoryVisibleRows = (int)_visibleRows.Value;
         _config.HistoryMaxAgeDays = (int)_maxAgeDays.Value;
         _config.MaxTransferMb = (int)_maxMb.Value;
         _config.ShareText = _shareText.Checked;

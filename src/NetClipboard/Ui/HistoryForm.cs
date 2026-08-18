@@ -36,6 +36,7 @@ public sealed class HistoryForm : Form
     private const int AvatarSz = 32;
 
     private readonly ClipboardHistory _history;
+    private readonly AppConfig _config;
     private readonly ClipList _list;
     private readonly Dictionary<string, Image> _thumbCache = new();
 
@@ -59,9 +60,10 @@ public sealed class HistoryForm : Form
 
     public event Action<HistoryItem>? ItemChosen;
 
-    public HistoryForm(ClipboardHistory history)
+    public HistoryForm(ClipboardHistory history, AppConfig config)
     {
         _history = history;
+        _config = config;
 
         AutoScaleMode = AutoScaleMode.None; // scaliamo noi, manualmente
         FormBorderStyle = FormBorderStyle.None;
@@ -158,8 +160,11 @@ public sealed class HistoryForm : Form
         // L'altezza della lista e' un multiplo esatto della riga: niente elemento
         // tagliato a meta' in fondo. Siccome la rotella scorre di una riga per
         // volta, l'allineamento regge anche durante lo scorrimento.
-        const int VisibleRows = 8;
-        var listH = P(RowH) * VisibleRows;
+        // Il numero di righe lo decide l'utente; si ricalcola a ogni apertura,
+        // percio' cambiarlo in Impostazioni ha effetto subito.
+        var visibleRows = Math.Clamp(_config.HistoryVisibleRows,
+                                     AppConfig.MinVisibleRows, AppConfig.MaxVisibleRows);
+        var listH = P(RowH) * visibleRows;
 
         _list.ItemHeight = P(RowH);
         Size = new Size(P(420), P(HeaderH) + listH + P(6));
