@@ -21,12 +21,19 @@ public sealed class HistoryForm : Form
     private static readonly Color AccentA = Color.FromArgb(120, 92, 245);
     private static readonly Color AccentB = Color.FromArgb(56, 180, 220);
     private static readonly Color SelBg = Color.FromArgb(52, 50, 74);
+    private static readonly Color HoverBg = Color.FromArgb(40, 40, 50);
+    private static readonly Color HeaderBg = Color.FromArgb(30, 30, 38);
+    private static readonly Color Divider = Color.FromArgb(46, 46, 57);
 
     // Misure logiche (a 96 DPI); vengono scalate da _scale.
-    private const int HeaderH = 62;
-    private const int FooterH = 28;
-    private const int Radius = 16;
-    private const int RowH = 62;
+    //
+    // Il pannello e' uno strumento di scelta rapida, non una pagina da leggere:
+    // ogni pixel speso in decorazione e' una riga in meno visibile. Intestazione
+    // ridotta all'osso, niente piu' piede, righe piu' compatte.
+    private const int HeaderH = 36;
+    private const int Radius = 12;
+    private const int RowH = 50;
+    private const int AvatarSz = 32;
 
     private readonly ClipboardHistory _history;
     private readonly ClipList _list;
@@ -43,7 +50,7 @@ public sealed class HistoryForm : Form
     private readonly System.Windows.Forms.Timer _expiryTick = new() { Interval = 1000 };
 
     private float _scale = 1f;
-    private Font _fTitle = null!, _fSub = null!, _fHint = null!, _fFooter = null!,
+    private Font _fTitle = null!, _fHint = null!,
                  _fPreview = null!, _fMeta = null!, _fBadge = null!;
 
     private IntPtr _target;
@@ -134,13 +141,11 @@ public sealed class HistoryForm : Form
         _scale = scale;
 
         DisposeFonts();
-        _fTitle = PxFont("Segoe UI Semibold", 15.5f);
-        _fSub = PxFont("Segoe UI", 11f);
-        _fHint = PxFont("Segoe UI", 10.5f);
-        _fFooter = PxFont("Segoe UI", 10f, FontStyle.Italic);
-        _fPreview = PxFont("Segoe UI", 13f);
-        _fMeta = PxFont("Segoe UI", 10.5f);
-        _fBadge = PxFont("Segoe UI", 16.5f, FontStyle.Bold);
+        _fTitle = PxFont("Segoe UI Semibold", 13f);
+        _fHint = PxFont("Segoe UI", 10f);
+        _fPreview = PxFont("Segoe UI", 12.5f);
+        _fMeta = PxFont("Segoe UI", 10f);
+        _fBadge = PxFont("Segoe UI", 13.5f, FontStyle.Bold);
 
         ApplyLayout();
     }
@@ -150,9 +155,15 @@ public sealed class HistoryForm : Form
 
     private void ApplyLayout()
     {
-        Size = new Size(P(440), P(520));
+        // L'altezza della lista e' un multiplo esatto della riga: niente elemento
+        // tagliato a meta' in fondo. Siccome la rotella scorre di una riga per
+        // volta, l'allineamento regge anche durante lo scorrimento.
+        const int VisibleRows = 8;
+        var listH = P(RowH) * VisibleRows;
+
         _list.ItemHeight = P(RowH);
-        _list.SetBounds(P(8), P(HeaderH), Width - P(16), Height - P(HeaderH) - P(FooterH));
+        Size = new Size(P(420), P(HeaderH) + listH + P(6));
+        _list.SetBounds(P(6), P(HeaderH), Width - P(12), listH);
         using var path = RoundedRect(new Rectangle(0, 0, Width, Height), P(Radius));
         Region = new Region(path);
     }
@@ -234,55 +245,53 @@ public sealed class HistoryForm : Form
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
+        // Barra sobria invece della fascia colorata: il colore serve a evidenziare
+        // il contenuto, non l'intestazione. Resta un solo accento, il segno a
+        // sinistra del nome, che fa da marchio senza rubare spazio.
         var headerRect = new Rectangle(0, 0, Width, P(HeaderH));
-        using (var grad = new LinearGradientBrush(headerRect, AccentA, AccentB, LinearGradientMode.Horizontal))
-            g.FillRectangle(grad, headerRect);
+        using (var hb = new SolidBrush(HeaderBg))
+            g.FillRectangle(hb, headerRect);
+        using (var line = new Pen(Divider))
+            g.DrawLine(line, 0, headerRect.Bottom - 1, Width, headerRect.Bottom - 1);
 
-        using (var chip = new SolidBrush(Color.FromArgb(235, 255, 255, 255)))
-            g.FillRoundedRect(chip, new Rectangle(P(16), P(16), P(26), P(28)), P(6));
-        using (var clipTop = new SolidBrush(AccentA))
-            g.FillRoundedRect(clipTop, new Rectangle(P(24), P(12), P(10), P(8)), P(3));
+        var mark = new Rectangle(P(12), (P(HeaderH) - P(14)) / 2, P(14), P(14));
+        using (var grad = new LinearGradientBrush(mark, AccentA, AccentB, LinearGradientMode.ForwardDiagonal))
+            g.FillRoundedRect(grad, mark, P(4));
 
-        TextRenderer.DrawText(g, L.T("app.name"), _fTitle, new Point(P(54), P(11)), Color.White, Color.Transparent);
-        TextRenderer.DrawText(g, L.T("history.subtitle"), _fSub,
-            new Point(P(55), P(34)), Color.FromArgb(232, 242, 247), Color.Transparent);
+        TextRenderer.DrawText(g, L.T("app.name"), _fTitle,
+            new Rectangle(mark.Right + P(8), 0, P(180), P(HeaderH)), TextMain,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+
         TextRenderer.DrawText(g, L.T("history.hint"), _fHint,
-            new Rectangle(Width - P(200), P(21), P(190), P(20)), Color.FromArgb(235, 245, 250),
-            TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
-
-        var footRect = new Rectangle(0, Height - P(FooterH), Width, P(FooterH));
-        using (var fb = new SolidBrush(Color.FromArgb(18, 18, 22)))
-            g.FillRectangle(fb, footRect);
-        using (var line = new Pen(Color.FromArgb(45, 45, 55)))
-            g.DrawLine(line, 0, footRect.Top, Width, footRect.Top);
-        TextRenderer.DrawText(g, L.T("history.credit"), _fFooter, footRect,
-            Color.FromArgb(115, 117, 130), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            new Rectangle(Width - P(200), 0, P(188), P(HeaderH)), TextMuted,
+            TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
-    private void DrawRow(Graphics g, HistoryItem item, Rectangle bounds, bool selected)
+    private void DrawRow(Graphics g, HistoryItem item, Rectangle bounds, bool selected, bool hovered)
     {
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        var row = new Rectangle(bounds.Left + P(6), bounds.Top + P(4), bounds.Width - P(12), bounds.Height - P(8));
-        using (var rb = new SolidBrush(selected ? SelBg : Card))
-            g.FillRoundedRect(rb, row, P(10));
+        var row = new Rectangle(bounds.Left + P(5), bounds.Top + P(3), bounds.Width - P(10), bounds.Height - P(6));
+        var face = selected ? SelBg : hovered ? HoverBg : Card;
+        using (var rb = new SolidBrush(face))
+            g.FillRoundedRect(rb, row, P(8));
         if (selected)
             using (var accent = new SolidBrush(AccentA))
-                g.FillRoundedRect(accent, new Rectangle(row.Left, row.Top + P(6), P(3), row.Height - P(12)), P(2));
+                g.FillRoundedRect(accent, new Rectangle(row.Left, row.Top + P(5), P(3), row.Height - P(10)), P(2));
 
-        var iconSz = P(40);
-        var slot = new Rectangle(row.Left + P(12), row.Top + (row.Height - iconSz) / 2, iconSz, iconSz);
+        var iconSz = P(AvatarSz);
+        var slot = new Rectangle(row.Left + P(10), row.Top + (row.Height - iconSz) / 2, iconSz, iconSz);
 
         // Sugli esterni l'avatar si stringe per lasciare posto all'anello di
         // scadenza che lo circonda: l'informazione sta addosso al contenuto,
         // invece che in un angolo staccato della riga.
-        var icon = item.FromExternal ? Rectangle.Inflate(slot, -P(5), -P(5)) : slot;
+        var icon = item.FromExternal ? Rectangle.Inflate(slot, -P(4), -P(4)) : slot;
         var spent = ClipboardHistory.IsSpent(item);
         var thumb = GetThumb(item, icon.Width);
         if (thumb != null)
         {
             using var clip = new GraphicsPath();
-            clip.AddRoundedRectangle(icon, P(8));
+            clip.AddRoundedRectangle(icon, P(7));
             var saved = g.Clip;
             g.SetClip(clip, CombineMode.Replace);
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
@@ -293,7 +302,7 @@ public sealed class HistoryForm : Form
         {
             var (c1, c2, glyph) = BadgeStyle(item);
             using (var grad = new LinearGradientBrush(icon, c1, c2, LinearGradientMode.ForwardDiagonal))
-                g.FillRoundedRect(grad, icon, P(8));
+                g.FillRoundedRect(grad, icon, P(7));
             TextRenderer.DrawText(g, glyph, _fBadge, icon, Color.White,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
@@ -309,8 +318,8 @@ public sealed class HistoryForm : Form
             using (var veil = new SolidBrush(Color.FromArgb(150, Card)))
                 g.FillRectangle(veil, slot);
 
-        var textLeft = slot.Right + P(12);
-        var textWidth = row.Right - textLeft - P(12);
+        var textLeft = slot.Right + P(10);
+        var textWidth = row.Right - textLeft - P(10);
 
         // Etichetta di stato a destra: la riga resta visibile come traccia di cio'
         // che e' passato, ma si vede che non e' piu' utilizzabile.
@@ -319,13 +328,13 @@ public sealed class HistoryForm : Form
             var tag = L.T(item.Used ? "history.used" : "history.expired");
             var tagW = TextRenderer.MeasureText(tag, _fMeta).Width + P(4);
             TextRenderer.DrawText(g, tag, _fMeta,
-                new Rectangle(row.Right - P(12) - tagW, row.Top + P(9), tagW, P(22)), TextSpent,
+                new Rectangle(row.Right - P(10) - tagW, row.Top + P(6), tagW, P(18)), TextSpent,
                 TextFormatFlags.Right | TextFormatFlags.NoPadding);
             textWidth -= tagW + P(8);
         }
 
         TextRenderer.DrawText(g, item.Preview, _fPreview,
-            new Rectangle(textLeft, row.Top + P(9), textWidth, P(22)), spent ? TextSpent : TextMain,
+            new Rectangle(textLeft, row.Top + P(6), textWidth, P(18)), spent ? TextSpent : TextMain,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
 
         var pin = item.Pinned ? "📌 " : "";
@@ -335,7 +344,7 @@ public sealed class HistoryForm : Form
         if (item.FromExternal) origin = L.T("history.external", origin);
         var meta = L.T("history.meta", pin, origin, LocalTime(item.TimestampUtc), toFetch);
         TextRenderer.DrawText(g, meta, _fMeta,
-            new Rectangle(textLeft, row.Top + P(33), textWidth, P(20)), spent ? TextSpent : TextMuted,
+            new Rectangle(textLeft, row.Top + P(24), textWidth, P(16)), spent ? TextSpent : TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
     }
 
@@ -427,7 +436,7 @@ public sealed class HistoryForm : Form
 
     private void DisposeFonts()
     {
-        _fTitle?.Dispose(); _fSub?.Dispose(); _fHint?.Dispose(); _fFooter?.Dispose();
+        _fTitle?.Dispose(); _fHint?.Dispose();
         _fPreview?.Dispose(); _fMeta?.Dispose(); _fBadge?.Dispose();
     }
 
@@ -458,10 +467,11 @@ public sealed class HistoryForm : Form
 
         private readonly List<HistoryItem> _items = new();
         private int _selected = -1;
+        private int _hover = -1;
         private int _scroll;
 
-        /// <summary>Disegna una riga: superficie, elemento, rettangolo, selezionata.</summary>
-        public event Action<Graphics, HistoryItem, Rectangle, bool>? DrawRow;
+        /// <summary>Disegna una riga: superficie, elemento, rettangolo, selezionata, sotto il puntatore.</summary>
+        public event Action<Graphics, HistoryItem, Rectangle, bool, bool>? DrawRow;
 
         public ClipList()
         {
@@ -531,8 +541,32 @@ public sealed class HistoryForm : Form
             ClampScroll();
         }
 
+        // Il riscontro al passaggio del mouse conta in un pannello che si usa per
+        // scegliere al volo: si ridisegnano solo le due righe coinvolte.
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            SetHover(IndexFromPoint(e.Location));
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            SetHover(-1);
+            base.OnMouseLeave(e);
+        }
+
+        private void SetHover(int index)
+        {
+            if (index == _hover) return;
+            var previous = _hover;
+            _hover = index;
+            if (previous >= 0) Invalidate(GetItemRectangle(previous));
+            if (_hover >= 0) Invalidate(GetItemRectangle(_hover));
+        }
+
         protected override void OnMouseWheel(MouseEventArgs e)
         {
+            SetHover(-1);   // dopo lo scorrimento la riga sotto il puntatore e' un'altra
             var before = _scroll;
             _scroll -= e.Delta / 120 * ItemHeight;
             ClampScroll();
@@ -572,7 +606,7 @@ public sealed class HistoryForm : Form
             var first = Math.Max(0, (_scroll + e.ClipRectangle.Top) / ItemHeight);
             var last = Math.Min(_items.Count - 1, (_scroll + e.ClipRectangle.Bottom) / ItemHeight);
             for (var i = first; i <= last; i++)
-                DrawRow?.Invoke(g, _items[i], GetItemRectangle(i), i == _selected);
+                DrawRow?.Invoke(g, _items[i], GetItemRectangle(i), i == _selected, i == _hover);
 
             DrawScrollbar(g);
         }

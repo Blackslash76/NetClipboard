@@ -123,9 +123,7 @@
   "sas.confirm": "Confermo",
   "sas.confirmCountdown": "Confermo ({0})",
 
-  "history.subtitle": "Appunti condivisi tra i tuoi dispositivi",
   "history.hint": "Invio incolla · Esc chiude",
-  "history.credit": "creato da Francesco Papeo",
   "history.pin": "Aggiungi pin",
   "history.unpin": "Rimuovi pin",
   "history.thisPc": "questo PC",
