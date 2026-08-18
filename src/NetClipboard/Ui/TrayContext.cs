@@ -24,6 +24,8 @@ public sealed class TrayContext : ApplicationContext
     /// Freno alla condivisione automatica: uno script che copia in ciclo
     /// riempirebbe rete e cronologia di tutti i dispositivi.
     /// </summary>
+    private readonly CancellationTokenSource _sendToCts = new();
+
     private readonly RateGuard _outgoingGuard =
         new(warnCount: 8, blockCount: 15, window: TimeSpan.FromSeconds(10), blockFor: TimeSpan.FromSeconds(30));
     private readonly TrustStore _trust;
@@ -131,6 +133,7 @@ public sealed class TrayContext : ApplicationContext
 
         UpdateTrayText();
         StartNetwork();
+        StartSendToBridge();
         StartWorkSignIn();
 
         if (_trust.All.Count == 0)
@@ -505,6 +508,58 @@ public sealed class TrayContext : ApplicationContext
         _tray.Icon = IconFactory.Create(_sharingEnabled);
     }
 
+    // ----- Voce nel menu "Invia a" di Windows -----
+
+    private void StartSendToBridge()
+    {
+        // La voce nel menu segue la configurazione: se il collegamento e' stato
+        // tolto a mano, si ricrea; se l'opzione e' spenta, si rimuove.
+        SendToShortcut.Apply(_config.SendToMenu);
+
+        InstanceBridge.Listen(paths =>
+        {
+            if (_monitor.IsHandleCreated) _monitor.BeginInvoke(() => _ = SendFilesFromExplorerAsync(paths));
+        }, _sendToCts.Token);
+    }
+
+    /// <summary>
+    /// File arrivati da Explorer: si costruisce l'offerta e si chiede a chi
+    /// mandarli. Di proposito NON si passa dagli appunti, che resterebbero
+    /// sovrascritti senza che l'utente lo abbia chiesto.
+    /// </summary>
+    private async Task SendFilesFromExplorerAsync(IReadOnlyList<string> paths)
+    {
+        var offer = FileOffer.FromPaths(paths, _identity.DeviceId, _config.DisplayName);
+        if (offer == null || offer.Entries.Count == 0)
+        {
+            Balloon(L.T("app.name"), L.T("msg.originalsGone"), ToolTipIcon.Warning);
+            return;
+        }
+
+        var peers = _transport.Peers.ToList();
+        if (peers.Count == 0)
+        {
+            Balloon(L.T("app.name"), L.T("sendto.noPeers"), ToolTipIcon.Warning);
+            return;
+        }
+
+        var fileCount = offer.Entries.Count(e => !e.IsDir);
+        using var dlg = new RecipientDialog(peers, fileCount, FormatSize(offer.TotalSize));
+        if (dlg.ShowDialog() != DialogResult.OK || dlg.Chosen == null) return;
+
+        _offerStore.Register(offer);
+        await SendPayloadToAsync(dlg.Chosen, ClipboardPayload.FromOffer(offer));
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        string[] units = { "unit.b", "unit.kb", "unit.mb", "unit.gb", "unit.tb" };
+        double v = bytes;
+        var i = 0;
+        while (v >= 1024 && i < units.Length - 1) { v /= 1024; i++; }
+        return L.T("unit.format", v, L.T(units[i]));
+    }
+
     // ----- Invio mirato a un altro utente della rete -----
 
     /// <summary>
@@ -540,7 +595,12 @@ public sealed class TrayContext : ApplicationContext
         if (payload == null) { Balloon(L.T("app.name"), L.T("msg.contentGone")); return; }
         if (payload.Kind == PayloadKind.Files && payload.Offer != null) _offerStore.Register(payload.Offer);
         if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
+        await SendPayloadToAsync(peer, payload);
+    }
 
+    /// <summary>Invio vero e proprio, comune al menu della tray e al menu di Windows.</summary>
+    private async Task SendPayloadToAsync(Peer peer, ClipboardPayload payload)
+    {
         // Si controlla prima di spedire: chi manda un file infetto quasi sempre non
         // lo sa, e accorgersene qui evita di far arrivare il problema a un collega.
         if (!await ScanBeforeSendAsync(payload)) return;

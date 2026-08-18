@@ -43,6 +43,9 @@ public sealed class AppConfig
 
     public bool StartWithWindows { get; set; } = false;
 
+    /// <summary>Voce di NetClipboard nel menu "Invia a" di Windows.</summary>
+    public bool SendToMenu { get; set; } = false;
+
     /// <summary>URL del manifest di aggiornamento (es. .../releases/latest/download/manifest.json). Vuoto = disattivato.</summary>
     public string UpdateManifestUrl { get; set; } = "";
 

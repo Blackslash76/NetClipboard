@@ -1,5 +1,6 @@
 using System.IO;
 using System.Threading;
+using NetClipboard.Core;
 using NetClipboard.Net;
 using NetClipboard.Ui;
 using NetClipboard.Update;
@@ -49,6 +50,24 @@ internal static class Program
                 File.WriteAllText("sign-error.txt", ex.ToString());
                 return 1;
             }
+        }
+
+        // Avviato dal menu "Invia a" di Windows: Explorer passa i percorsi
+        // selezionati come argomenti. Questo processo non ha rete ne' dispositivi,
+        // quindi consegna i percorsi all'istanza gia' in esecuzione e termina.
+        if (args.Length > 0 && string.Equals(args[0], SendToShortcut.Argument, StringComparison.OrdinalIgnoreCase))
+        {
+            var paths = args.Skip(1).Where(a => File.Exists(a) || Directory.Exists(a)).ToList();
+            if (paths.Count == 0) return 0;
+
+            if (!InstanceBridge.TrySend(paths))
+            {
+                NetClipboard.Core.L.Init();
+                MessageBox.Show(NetClipboard.Core.L.T("sendto.notRunning"),
+                                NetClipboard.Core.L.T("app.name"),
+                                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            return 0;
         }
 
         // Una sola istanza per utente.

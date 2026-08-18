@@ -37,6 +37,7 @@ public sealed class SettingsForm : ScaledForm
     private readonly CheckBox _shareImages = new() { AutoSize = true };
     private readonly CheckBox _shareFiles = new() { AutoSize = true };
     private readonly CheckBox _autostart = new() { AutoSize = true };
+    private readonly CheckBox _sendToMenu = new() { AutoSize = true };
     private readonly CheckBox _autoScan = new() { AutoSize = true };
     private readonly CheckBox _autoUpdate = new() { AutoSize = true };
     private readonly TextBox _updateUrl = new();
@@ -93,6 +94,7 @@ public sealed class SettingsForm : ScaledForm
         _shareImages.Text = L.T("settings.shareImages");
         _shareFiles.Text = L.T("settings.shareFiles");
         _autostart.Text = L.T("settings.autostart");
+        _sendToMenu.Text = L.T("settings.sendToMenu");
         _autoScan.Text = L.T("settings.autoScan");
         _autoUpdate.Text = L.T("settings.autoUpdate");
         _lblUpdateUrl.Text = L.T("settings.updateUrl");
@@ -162,7 +164,7 @@ public sealed class SettingsForm : ScaledForm
             _lblAge, _maxAgeDays,
             _lblSize, _maxMb,
             _lblShare, _shareText, _shareImages, _shareFiles,
-            _autostart, _autoScan, _autoUpdate,
+            _autostart, _sendToMenu, _autoScan, _autoUpdate,
             _lblUpdateUrl, _updateUrl,
             _lblPeers, _lblPeersHint, _manualPeers,
             _firewall, _firewallBtn,
@@ -205,7 +207,7 @@ public sealed class SettingsForm : ScaledForm
         y += RowH;
 
         y += 6;
-        foreach (var cb in new[] { _autostart, _autoScan, _autoUpdate })
+        foreach (var cb in new[] { _autostart, _sendToMenu, _autoScan, _autoUpdate })
         {
             cb.Location = new Point(P(CtlX), P(y));
             y += 28;
@@ -284,6 +286,7 @@ public sealed class SettingsForm : ScaledForm
         _shareImages.Checked = _config.ShareImages;
         _shareFiles.Checked = _config.ShareFiles;
         _autostart.Checked = _config.StartWithWindows;
+        _sendToMenu.Checked = _config.SendToMenu;
         _autoScan.Checked = _config.AutoScanDiscovery;
         _autoUpdate.Checked = _config.AutoUpdateCheck;
         _updateUrl.Text = _config.UpdateManifestUrl;
@@ -303,6 +306,7 @@ public sealed class SettingsForm : ScaledForm
         _config.ShareFiles = _shareFiles.Checked;
         _config.StartWithWindows = _autostart.Checked;
         _config.AutoScanDiscovery = _autoScan.Checked;
+        _config.SendToMenu = SendToShortcut.Apply(_sendToMenu.Checked);
         _config.AutoUpdateCheck = _autoUpdate.Checked;
         _config.UpdateManifestUrl = _updateUrl.Text.Trim();
         _config.ManualPeers = _manualPeers.Text
