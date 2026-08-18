@@ -31,6 +31,7 @@ public sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem _devicesItem;
     private readonly ToolStripMenuItem _updateItem;
     private readonly ToolStripMenuItem _workItem;
+    private readonly ToolStripMenuItem _sendToItem;
 
     private System.Threading.Timer? _updateTimer;
     private string? _pendingUpdatePath;
@@ -63,6 +64,7 @@ public sealed class TrayContext : ApplicationContext
         _transport = new ClipboardTransport(_config, _identity, _trust, _offerStore)
         {
             PairingConfirm = ShowSasDialog,
+            OfferConfirm = ShowIncomingOfferDialog,
         };
         _discovery = new PeerDiscovery(_config, ip => _transport.AddCandidate(ip));
         _historyForm = new HistoryForm(_history);
@@ -74,6 +76,8 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(_sharingItem);
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.openHistory"), null, (_, _) => ShowHistory()));
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.sendNow"), null, (_, _) => SendCurrentClipboard()));
+        _sendToItem = new ToolStripMenuItem(L.T("tray.sendTo"));
+        menu.Items.Add(_sendToItem);
         menu.Items.Add(new ToolStripSeparator());
         _devicesItem = new ToolStripMenuItem(L.T("tray.devices")) { Enabled = false };
         menu.Items.Add(_devicesItem);
@@ -100,7 +104,7 @@ public sealed class TrayContext : ApplicationContext
         menu.Items.Add(_updateItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.exit"), null, (_, _) => ExitApp()));
-        menu.Opening += (_, _) => { RefreshDevicesMenu(); RefreshWorkMenu(); };
+        menu.Opening += (_, _) => { RefreshDevicesMenu(); RefreshSendToMenu(); RefreshWorkMenu(); };
 
         _tray = new NotifyIcon
         {
@@ -395,6 +399,68 @@ public sealed class TrayContext : ApplicationContext
         _tray.Icon = IconFactory.Create(_sharingEnabled);
     }
 
+    // ----- Invio mirato a un altro utente della rete -----
+
+    /// <summary>
+    /// Elenco dei destinatari: una voce per PC visto in rete, i propri per primi.
+    /// Se il peer annuncia un'identità aziendale si vede il nome della persona,
+    /// altrimenti si ripiega sul nome macchina.
+    /// </summary>
+    private void RefreshSendToMenu()
+    {
+        _sendToItem.DropDownItems.Clear();
+
+        var peers = _transport.Peers
+            .OrderByDescending(p => p.Trusted)
+            .ThenBy(p => p.Label, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+
+        _sendToItem.Enabled = peers.Count > 0;
+        if (peers.Count == 0)
+        {
+            _sendToItem.Text = L.T("tray.sendToNone");
+            return;
+        }
+
+        _sendToItem.Text = L.T("tray.sendTo");
+        foreach (var p in peers)
+        {
+            var mark = p.Trusted ? "🔒 " : "• "; // simboli, non testo da tradurre
+            _sendToItem.DropDownItems.Add(
+                new ToolStripMenuItem(mark + p.Label, null, (_, _) => _ = SendToAsync(p)));
+        }
+    }
+
+    private async Task SendToAsync(Peer peer)
+    {
+        var payload = _monitor.TryReadClipboard();
+        if (payload == null) { Balloon(L.T("app.name"), L.T("msg.contentGone")); return; }
+        if (payload.Kind == PayloadKind.Files && payload.Offer != null) _offerStore.Register(payload.Offer);
+        if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
+
+        Balloon(L.T("app.name"), L.T("msg.sendingTo", peer.Label));
+        var outcome = await _transport.SendToAsync(peer, payload);
+        Balloon(L.T("app.name"),
+            outcome switch
+            {
+                SendOutcome.Delivered => L.T("msg.sendDelivered", peer.Label),
+                SendOutcome.Declined => L.T("msg.sendDeclined", peer.Label),
+                _ => L.T("msg.sendFailed", peer.Label),
+            },
+            outcome == SendOutcome.Delivered ? ToolTipIcon.Info : ToolTipIcon.Warning);
+    }
+
+    /// <summary>Conferma di ricezione da un peer non accoppiato. Bloccante: il mittente attende la risposta.</summary>
+    private bool ShowIncomingOfferDialog(IncomingOffer offer)
+    {
+        if (!_monitor.IsHandleCreated) return false;
+        return (bool)_monitor.Invoke(new Func<bool>(() =>
+        {
+            using var dlg = new IncomingOfferDialog(offer);
+            return dlg.ShowDialog() == DialogResult.OK;
+        }));
+    }
+
     // ----- Identità aziendale (Entra ID) -----
 
     /// <summary>
@@ -409,8 +475,9 @@ public sealed class TrayContext : ApplicationContext
         // La finestra nascosta del monitor fa da genitore al popup del broker:
         // WAM pretende un handle di questo processo, non la finestra in primo piano.
         _entra.ParentWindow = () => _monitor.Handle;
-        _entra.Changed += _ =>
+        _entra.Changed += me =>
         {
+            _transport.SelfWork = me; // così gli altri ci elencano per nome, non per nome-macchina
             if (_monitor.IsHandleCreated) _monitor.BeginInvoke(UpdateTrayText);
         };
 

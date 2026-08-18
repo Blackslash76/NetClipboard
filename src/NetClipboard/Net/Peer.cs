@@ -16,6 +16,20 @@ public sealed class Peer
     /// <summary>True se il dispositivo è nella lista dei fidati (pairing avvenuto).</summary>
     public bool Trusted { get; set; }
 
+    /// <summary>
+    /// Identità aziendale dichiarata dal peer nel ping, se ne ha una.
+    ///
+    /// ATTENZIONE: al momento è un dato DICHIARATO, non verificato: viaggia come
+    /// campo in chiaro e chiunque potrebbe scriverci un nome altrui. Serve solo a
+    /// rendere leggibile l'elenco "Invia a…". La sicurezza sta nella conferma
+    /// esplicita di chi riceve. La verifica vera (firma dell'ID token contro le
+    /// chiavi pubbliche del tenant) arriva quando ci sarà l'app registration.
+    /// </summary>
+    public Core.Identity.WorkIdentity? Work { get; set; }
+
+    /// <summary>Come chiamare questo peer nell'interfaccia: la persona se c'è, altrimenti la macchina.</summary>
+    public string Label => Work != null ? $"{Work.Label} · {Name}" : Name;
+
     public DateTime LastSeenUtc { get; set; } = DateTime.UtcNow;
 
     public IPEndPoint EndPoint => new(Address, Port);

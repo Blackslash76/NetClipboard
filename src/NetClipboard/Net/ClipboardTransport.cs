@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using NetClipboard.Core;
+using NetClipboard.Core.Identity;
 using NetClipboard.Core.Security;
 
 namespace NetClipboard.Net;
@@ -15,6 +16,11 @@ public sealed record ReceivedClip(ClipboardPayload Payload, string FromName, str
 public sealed record PairingPrompt(string Sas, string PeerName, string Fingerprint);
 
 public enum PairOutcome { Paired, Rejected, Failed }
+
+/// <summary>Richiesta di invio in arrivo da un peer NON accoppiato: va confermata a mano.</summary>
+public sealed record IncomingOffer(string FromLabel, string FromDeviceId, PayloadKind Kind, string Preview);
+
+public enum SendOutcome { Delivered, Declined, Failed }
 
 /// <summary>Avanzamento del download dei file (delayed rendering).</summary>
 public sealed record FetchProgress(string CurrentName, long BytesDone, int FilesDone);
@@ -38,6 +44,7 @@ public sealed class ClipboardTransport : IDisposable
     private const byte OpPush = 2;
     private const byte OpFetch = 3;
     private const byte OpPair = 4;
+    private const byte OpOffer = 5;   // invio mirato a un peer non accoppiato (richiede conferma)
 
     // Frame di streaming fetch (dentro la sessione cifrata)
     private const byte FEnd = 0x00;
@@ -67,6 +74,22 @@ public sealed class ClipboardTransport : IDisposable
 
     /// <summary>Chiamato per confermare un pairing mostrando il codice SAS; ritorna true se accettato.</summary>
     public Func<PairingPrompt, bool>? PairingConfirm;
+
+    /// <summary>Chiamato quando un peer NON accoppiato ci manda qualcosa; ritorna true se l'utente accetta.</summary>
+    public Func<IncomingOffer, bool>? OfferConfirm;
+
+    /// <summary>
+    /// Identità aziendale di chi usa questo PC, annunciata nel ping perché gli
+    /// altri possano elencarci per nome. Null finché non c'è un accesso Entra.
+    /// </summary>
+    public WorkIdentity? SelfWork { get; set; }
+
+    /// <summary>
+    /// Permessi di prelievo file concessi uno per uno: "il dispositivo X può
+    /// scaricare l'offerta Y". Servono perché un invio a un non accoppiato
+    /// possa contenere file senza aprire OpFetch a chiunque.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _fetchGrants = new();
 
     public ClipboardTransport(AppConfig config, DeviceIdentity identity, TrustStore trust, OfferStore offerStore)
     {
@@ -169,9 +192,13 @@ public sealed class ClipboardTransport : IDisposable
                         var payload = ClipboardPayload.Deserialize(body);
                         Received?.Invoke(new ReceivedClip(payload, PeerName(session.R.PeerDeviceId), session.R.PeerDeviceId));
                         break;
-                    case OpFetch when trusted:
+                    case OpFetch:
                         var offerId = new Guid(body.AsSpan(0, 16).ToArray());
-                        await ServeFetchAsync(stream, session, offerId, ct);
+                        if (trusted || IsGranted(session.R.PeerDeviceId, offerId))
+                            await ServeFetchAsync(stream, session, offerId, ct);
+                        break;
+                    case OpOffer:
+                        await HandleOfferServerAsync(stream, session, body, ct);
                         break;
                     case OpPair:
                         await HandlePairServerAsync(stream, session, remote, body, ct);
@@ -187,11 +214,36 @@ public sealed class ClipboardTransport : IDisposable
 
     private async Task HandlePingServerAsync(NetworkStream stream, Session s, IPAddress remote, bool trusted, byte[] body, CancellationToken ct)
     {
-        var (name, port, gossip) = ParsePing(body);
-        UpsertPeer(s.R.PeerDeviceId, name, remote, port, s.R.PeerPublicKeyDer, trusted);
+        var (name, port, gossip, work) = ParsePing(body);
+        UpsertPeer(s.R.PeerDeviceId, name, remote, port, s.R.PeerPublicKeyDer, trusted, work);
         if (trusted) ProcessGossip(gossip);
         await WriteSessionAsync(stream, s.Cipher, BuildPing(), ct);
     }
+
+    /// <summary>
+    /// Invio mirato da un peer non accoppiato: si chiede conferma all'utente e si
+    /// risponde subito sì/no, così il mittente sa se è stato consegnato.
+    /// </summary>
+    private async Task HandleOfferServerAsync(NetworkStream stream, Session s, byte[] body, CancellationToken ct)
+    {
+        ClipboardPayload payload;
+        try { payload = ClipboardPayload.Deserialize(body); }
+        catch { return; }
+
+        var peer = _peers.GetValueOrDefault(s.R.PeerDeviceId);
+        var label = peer?.Label ?? DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId);
+        var accepted = OfferConfirm?.Invoke(
+            new IncomingOffer(label, s.R.PeerDeviceId, payload.Kind, payload.ShortPreview())) ?? false;
+
+        await WriteSessionAsync(stream, s.Cipher, new[] { accepted ? (byte)1 : (byte)0 }, ct);
+        Log.Write($"[Transport] invio da {label}: {(accepted ? "accettato" : "rifiutato")}");
+        if (accepted) Received?.Invoke(new ReceivedClip(payload, label, s.R.PeerDeviceId));
+    }
+
+    private static string GrantKey(string deviceId, Guid offerId) => deviceId + ":" + offerId.ToString("N");
+
+    private bool IsGranted(string deviceId, Guid offerId) =>
+        _fetchGrants.ContainsKey(GrantKey(deviceId, offerId));
 
     // ===================== CLIENT =====================
 
@@ -238,9 +290,9 @@ public sealed class ClipboardTransport : IDisposable
             var reply = await ReadSessionAsync(stream, s.Cipher, cts.Token);
             if (reply == null || reply.Length == 0 || reply[0] != OpPing) return;
 
-            var (name, port, gossip) = ParsePing(reply[1..]);
+            var (name, port, gossip, work) = ParsePing(reply[1..]);
             RememberIp(addr.ToString());
-            UpsertPeer(s.R.PeerDeviceId, name, addr, port, s.R.PeerPublicKeyDer, trusted);
+            UpsertPeer(s.R.PeerDeviceId, name, addr, port, s.R.PeerPublicKeyDer, trusted, work);
             if (trusted) ProcessGossip(gossip);
         }
         catch (Exception ex)
@@ -256,6 +308,47 @@ public sealed class ClipboardTransport : IDisposable
         if (targets.Count == 0) return;
         var frame = Concat(new[] { OpPush }, payload.Serialize());
         await Task.WhenAll(targets.Select(p => PushToPeerAsync(p, frame)));
+    }
+
+    /// <summary>
+    /// Invio mirato a UN destinatario, anche non accoppiato: l'altro lato vede una
+    /// richiesta e decide. Se il contenuto sono file, ad accettazione avvenuta gli
+    /// si concede il permesso di prelevarli.
+    /// </summary>
+    public async Task<SendOutcome> SendToAsync(Peer peer, ClipboardPayload payload)
+    {
+        // Verso un dispositivo già fidato non ha senso far comparire una richiesta:
+        // è la stessa mesh, si usa il percorso normale.
+        var op = peer.Trusted ? OpPush : OpOffer;
+        if (payload.Kind == PayloadKind.Files && payload.Offer != null && !peer.Trusted)
+            _fetchGrants.TryAdd(GrantKey(peer.DeviceId, payload.Offer.OfferId), 1);
+
+        try
+        {
+            using var client = new TcpClient();
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2)); // l'utente deve rispondere
+            await client.ConnectAsync(peer.Address, peer.Port, cts.Token);
+            await using var stream = client.GetStream();
+
+            var s = await ClientHandshakeAsync(stream, cts.Token);
+            if (s == null || s.R.PeerDeviceId != peer.DeviceId) return SendOutcome.Failed;
+
+            await WriteSessionAsync(stream, s.Cipher, Concat(new[] { op }, payload.Serialize()), cts.Token);
+            if (op == OpPush) return SendOutcome.Delivered;
+
+            var reply = await ReadSessionAsync(stream, s.Cipher, cts.Token);
+            var accepted = reply is { Length: > 0 } && reply[0] == 1;
+            if (!accepted && payload.Offer != null)
+                _fetchGrants.TryRemove(GrantKey(peer.DeviceId, payload.Offer.OfferId), out _);
+            return accepted ? SendOutcome.Delivered : SendOutcome.Declined;
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"[Transport] invio a {peer.Label} fallito: {ex.Message}");
+            if (payload.Offer != null)
+                _fetchGrants.TryRemove(GrantKey(peer.DeviceId, payload.Offer.OfferId), out _);
+            return SendOutcome.Failed;
+        }
     }
 
     private async Task PushToPeerAsync(Peer peer, byte[] opFrame)
@@ -321,7 +414,7 @@ public sealed class ClipboardTransport : IDisposable
 
     private async Task HandlePairServerAsync(NetworkStream stream, Session s, IPAddress remote, byte[] body, CancellationToken ct)
     {
-        var (clientName, clientPort, _) = ParsePing(body); // stesso formato (name, port, [gossip vuoto])
+        var (clientName, clientPort, _, _) = ParsePing(body); // stesso formato (name, port, gossip, identità)
 
         var mine = PairingConfirm?.Invoke(
             new PairingPrompt(s.R.Sas, clientName, DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId))) ?? false;
@@ -476,12 +569,13 @@ public sealed class ClipboardTransport : IDisposable
 
     // ===================== PEER REGISTRY / GOSSIP =====================
 
-    private void UpsertPeer(string deviceId, string name, IPAddress addr, int port, byte[]? pub, bool trusted)
+    private void UpsertPeer(string deviceId, string name, IPAddress addr, int port, byte[]? pub, bool trusted,
+                           WorkIdentity? work = null)
     {
         var isNew = !_peers.ContainsKey(deviceId);
         _peers.AddOrUpdate(deviceId,
-            _ => new Peer { DeviceId = deviceId, Name = name, Address = addr, Port = port, PublicKeyDer = pub, Trusted = trusted },
-            (_, p) => { p.Name = name; p.Address = addr; p.Port = port; p.PublicKeyDer = pub; p.Trusted = trusted; p.LastSeenUtc = DateTime.UtcNow; return p; });
+            _ => new Peer { DeviceId = deviceId, Name = name, Address = addr, Port = port, PublicKeyDer = pub, Trusted = trusted, Work = work },
+            (_, p) => { p.Name = name; p.Address = addr; p.Port = port; p.PublicKeyDer = pub; p.Trusted = trusted; p.LastSeenUtc = DateTime.UtcNow; if (work != null) p.Work = work; return p; });
         if (isNew) Log.Write($"[Transport] peer: {name} @ {addr} {(trusted ? "[FIDATO]" : "[non fidato]")}");
         PeersChanged?.Invoke();
     }
@@ -523,6 +617,12 @@ public sealed class ClipboardTransport : IDisposable
         {
             WStr(w, p.DeviceId); WStr(w, p.Name); WStr(w, p.Address.ToString()); w.Write(p.Port); WBuf(w, p.PublicKeyDer!);
         }
+
+        // Identità aziendale IN CODA: le versioni precedenti leggono fin qui e
+        // ignorano il resto, quindi il campo si aggiunge senza rompere nulla.
+        var me = SelfWork;
+        WStr(w, me?.TenantId ?? ""); WStr(w, me?.ObjectId ?? "");
+        WStr(w, me?.UserPrincipalName ?? ""); WStr(w, me?.DisplayName ?? "");
         return ms.ToArray();
     }
 
@@ -536,7 +636,7 @@ public sealed class ClipboardTransport : IDisposable
         return ms.ToArray();
     }
 
-    private static (string Name, int Port, List<GossipEntry> Gossip) ParsePing(byte[] body)
+    private static (string Name, int Port, List<GossipEntry> Gossip, WorkIdentity? Work) ParsePing(byte[] body)
     {
         var gossip = new List<GossipEntry>();
         try
@@ -550,9 +650,20 @@ public sealed class ClipboardTransport : IDisposable
                 var id = RStr(r); var nm = RStr(r); var ip = RStr(r); var pt = r.ReadInt32(); var pub = RBuf(r);
                 gossip.Add(new GossipEntry(id, nm, ip, pt, pub));
             }
-            return (name, port, gossip);
+
+            // Coda opzionale: i peer di versione precedente non la mandano, e la
+            // sua assenza non deve far perdere nome e porta letti sopra.
+            WorkIdentity? work = null;
+            try
+            {
+                var tid = RStr(r); var oid = RStr(r); var upn = RStr(r); var dn = RStr(r);
+                if (tid.Length > 0 && oid.Length > 0) work = new WorkIdentity(tid, oid, upn, dn);
+            }
+            catch (EndOfStreamException) { }
+
+            return (name, port, gossip, work);
         }
-        catch { return ("?", 0, gossip); }
+        catch { return ("?", 0, gossip, null); }
     }
 
     private void RememberIp(string ip)
@@ -676,7 +787,19 @@ public sealed class ClipboardTransport : IDisposable
     private static int ReadInt(byte[] b, int o) => b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24);
     private static byte[] Concat(byte[] a, byte[] b) { var r = new byte[a.Length + b.Length]; Buffer.BlockCopy(a, 0, r, 0, a.Length); Buffer.BlockCopy(b, 0, r, a.Length, b.Length); return r; }
     private static void WBuf(BinaryWriter w, byte[] b) { w.Write(b.Length); w.Write(b); }
-    private static byte[] RBuf(BinaryReader r) { var n = r.ReadInt32(); return r.ReadBytes(n); }
+    /// <summary>
+    /// Campi di framing (nomi, ID, chiavi, firme): nessuno arriva a un KB. Il tetto
+    /// evita che un prefisso di lunghezza malevolo faccia allocare centinaia di MB,
+    /// visto che ReadBytes non lancia a fine stream ma si limita a leggere meno.
+    /// </summary>
+    private const int MaxFieldBytes = 64 * 1024;
+
+    private static byte[] RBuf(BinaryReader r)
+    {
+        var n = r.ReadInt32();
+        if (n < 0 || n > MaxFieldBytes) throw new InvalidDataException($"campo di {n} byte fuori limite");
+        return r.ReadBytes(n);
+    }
     private static void WStr(BinaryWriter w, string s) => WBuf(w, Encoding.UTF8.GetBytes(s));
     private static string RStr(BinaryReader r) => Encoding.UTF8.GetString(RBuf(r));
 
