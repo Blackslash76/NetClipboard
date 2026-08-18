@@ -91,6 +91,21 @@ public sealed class ClipboardTransport : IDisposable
     /// </summary>
     private readonly ConcurrentDictionary<string, byte> _fetchGrants = new();
 
+    /// <summary>
+    /// L'altra faccia di <see cref="_fetchGrants"/>: le offerte che NOI abbiamo
+    /// accettato da un peer non accoppiato. Senza questo elenco il prelievo dei
+    /// file si fermerebbe, perché FetchAsync pretende un peer fidato.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, byte> _acceptedOffers = new();
+
+    /// <summary>Ultima richiesta di invio per peer, per non farsi tempestare di finestre.</summary>
+    private readonly ConcurrentDictionary<string, long> _lastOfferAt = new();
+
+    private const int OfferCooldownMs = 10_000;
+
+    /// <summary>0/1: una sola finestra di conferma per volta, qualunque sia il mittente.</summary>
+    private int _offerDialogOpen;
+
     public ClipboardTransport(AppConfig config, DeviceIdentity identity, TrustStore trust, OfferStore offerStore)
     {
         _config = config;
@@ -232,8 +247,38 @@ public sealed class ClipboardTransport : IDisposable
 
         var peer = _peers.GetValueOrDefault(s.R.PeerDeviceId);
         var label = peer?.Label ?? DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId);
-        var accepted = OfferConfirm?.Invoke(
-            new IncomingOffer(label, s.R.PeerDeviceId, payload.Kind, payload.ShortPreview())) ?? false;
+
+        // Chi non è accoppiato non deve poter far comparire finestre a raffica:
+        // una richiesta ogni OfferCooldownMs per mittente, e mai due insieme.
+        var now = Environment.TickCount64;
+        var last = _lastOfferAt.GetValueOrDefault(s.R.PeerDeviceId);
+        if (last != 0 && now - last < OfferCooldownMs)
+        {
+            Log.Write($"[Transport] invio da {label} ignorato: troppo ravvicinato");
+            await WriteSessionAsync(stream, s.Cipher, new byte[] { 0 }, ct);
+            return;
+        }
+        _lastOfferAt[s.R.PeerDeviceId] = now;
+
+        if (Interlocked.CompareExchange(ref _offerDialogOpen, 1, 0) != 0)
+        {
+            Log.Write($"[Transport] invio da {label} ignorato: c'è già una richiesta aperta");
+            await WriteSessionAsync(stream, s.Cipher, new byte[] { 0 }, ct);
+            return;
+        }
+
+        bool accepted;
+        try
+        {
+            accepted = OfferConfirm?.Invoke(
+                new IncomingOffer(label, s.R.PeerDeviceId, payload.Kind, payload.ShortPreview())) ?? false;
+        }
+        finally { Interlocked.Exchange(ref _offerDialogOpen, 0); }
+
+        // Se sono file, il contenuto non è ancora arrivato: va annotato il permesso
+        // di andarselo a prendere, altrimenti il prelievo verrebbe rifiutato.
+        if (accepted && payload.Kind == PayloadKind.Files && payload.Offer != null)
+            _acceptedOffers.TryAdd(GrantKey(s.R.PeerDeviceId, payload.Offer.OfferId), 1);
 
         await WriteSessionAsync(stream, s.Cipher, new[] { accepted ? (byte)1 : (byte)0 }, ct);
         Log.Write($"[Transport] invio da {label}: {(accepted ? "accettato" : "rifiutato")}");
@@ -457,7 +502,11 @@ public sealed class ClipboardTransport : IDisposable
         await using var stream = client.GetStream();
 
         var s = await ClientHandshakeAsync(stream, ct);
-        if (s == null || !_trust.Matches(s.R.PeerDeviceId, s.R.PeerPublicKeyDer))
+        // O il proprietario è fidato, oppure è un collega di cui abbiamo accettato
+        // proprio questa offerta. In entrambi i casi dev'essere il dispositivo atteso.
+        if (s == null || s.R.PeerDeviceId != owner.DeviceId ||
+            (!_trust.Matches(s.R.PeerDeviceId, s.R.PeerPublicKeyDer) &&
+             !_acceptedOffers.ContainsKey(GrantKey(s.R.PeerDeviceId, offerId))))
             throw new IOException(L.T("error.notTrusted"));
 
         await WriteSessionAsync(stream, s.Cipher, Concat(new[] { OpFetch }, offerId.ToByteArray()), ct);
@@ -483,8 +532,18 @@ public sealed class ClipboardTransport : IDisposable
                     var isDir = plain[1] != 0;
                     var relLen = ReadInt(plain, 10);
                     var rel = Encoding.UTF8.GetString(plain, 14, relLen);
+
+                    // Il nome lo decide il mittente: se punta fuori dalla cartella di
+                    // destinazione l'entry si scarta e si prosegue. I frame FData che
+                    // seguono trovano current == null e vengono ignorati da soli.
+                    var target = SafeTarget(destDir, rel);
+                    if (target == null)
+                    {
+                        Log.Write($"[Fetch] entry scartata, percorso non sicuro: {rel}");
+                        continue;
+                    }
+
                     if (!rel.Contains('/')) topNames.Add(rel);
-                    var target = Path.Combine(destDir, rel.Replace('/', Path.DirectorySeparatorChar));
                     if (isDir) Directory.CreateDirectory(target);
                     else
                     {
@@ -550,6 +609,48 @@ public sealed class ClipboardTransport : IDisposable
             await WriteSessionAsync(stream, s.Cipher, new[] { FEntryEnd }, ct);
         }
         await WriteSessionAsync(stream, s.Cipher, new[] { FEnd }, ct);
+    }
+
+    /// <summary>
+    /// Percorso di destinazione per un'entry ricevuta, oppure null se non è sicuro.
+    ///
+    /// Il percorso relativo arriva dal peer, quindi è dato ostile. Senza controlli
+    /// un mittente accoppiato scriverebbe ovunque: Path.Combine, se il secondo
+    /// argomento è assoluto, SCARTA il primo e restituisce l'assoluto, perciò
+    /// bastava "C:/.../Esecuzione automatica/x.exe" per ottenere esecuzione di
+    /// codice al login. Si rifiutano percorsi radicati, risalite e due punti
+    /// (unità e stream alternativi NTFS), e si verifica che il risultato
+    /// normalizzato resti dentro la cartella di destinazione.
+    /// </summary>
+    private static string? SafeTarget(string destDir, string rel)
+    {
+        if (string.IsNullOrWhiteSpace(rel) || rel.Contains('\0')) return null;
+
+        if (Path.IsPathRooted(rel)) return null;
+
+        // Si separa su entrambi i caratteri per non dover scrivere il backslash
+        // a mano: su Windows Alt e' '/', Directory e' il rovescio.
+        var segments = rel.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                                 StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0) return null;
+
+        foreach (var seg in segments)
+        {
+            if (seg == ".." || seg == "." || seg.Contains(':')) return null;
+            if (seg.EndsWith(' ') || seg.EndsWith('.')) return null; // insidie di Win32
+        }
+
+        string root, full;
+        try
+        {
+            root = Path.GetFullPath(destDir);
+            full = Path.GetFullPath(Path.Combine(root, Path.Combine(segments)));
+        }
+        catch { return null; }
+
+        // Il confronto vuole il separatore finale, altrimenti "C:\dest" accetterebbe "C:\destinazione".
+        var prefix = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+        return full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? full : null;
     }
 
     private static byte[] HeaderFrame(FileEntry e, long size)
