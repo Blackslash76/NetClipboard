@@ -75,6 +75,7 @@ public sealed class TrayContext : ApplicationContext
         {
             PairingConfirm = ShowSasDialog,
             OfferConfirm = ShowIncomingOfferDialog,
+            IntroductionConfirm = ShowIntroductionDialog,
         };
         _transport.ContentBlocked += from =>
         {
@@ -417,6 +418,22 @@ public sealed class TrayContext : ApplicationContext
         {
             using var dlg = new SasDialog(prompt);
             return dlg.ShowDialog() == DialogResult.OK;
+        }));
+    }
+
+    /// <summary>
+    /// Un dispositivo fidato ne presenta un altro. Null se il tempo scade senza
+    /// risposta: non e' un rifiuto, e la proposta tornera' piu' tardi.
+    /// </summary>
+    private bool? ShowIntroductionDialog(IntroductionPrompt prompt)
+    {
+        if (!_monitor.IsHandleCreated) return null;
+        return (bool?)_monitor.Invoke(new Func<bool?>(() =>
+        {
+            using var dlg = new IntroductionDialog(prompt);
+            var result = dlg.ShowDialog();
+            if (dlg.TimedOut) return null;
+            return result == DialogResult.OK;
         }));
     }
 

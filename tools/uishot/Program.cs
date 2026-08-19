@@ -50,6 +50,8 @@ internal static class Program
             new Shot("cronologia", History, SelectFirstRow),
             new Shot("richiesta-in-arrivo", Incoming),
             new Shot("codice-pairing", Sas),
+            new Shot("presentazione", () => new IntroductionDialog(
+                new IntroductionPrompt("PC-CASA", "NOTEBOOK-FP", "T4LS-9NZC-2VHA"))),
             new Shot("trasferimento", Transfer, f => ((TransferForm)f).Report("bilancio-2026.xlsx", 1_800_000)),
             new Shot("impostazioni", Settings),
             new Shot("dispositivi", Devices, FillDevices),

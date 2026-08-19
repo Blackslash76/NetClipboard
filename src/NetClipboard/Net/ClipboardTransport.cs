@@ -21,6 +21,12 @@ public sealed record ReceivedClip(ClipboardPayload Payload, string FromName, str
 /// <summary>Dati mostrati all'utente per confermare un pairing (codice + chi).</summary>
 public sealed record PairingPrompt(string Sas, string PeerName, string Fingerprint);
 
+/// <summary>
+/// Un dispositivo fidato ne presenta un altro che non conosciamo. Non basta la
+/// sua parola: si mostra a chi presenta e chi viene presentato, e decide l'utente.
+/// </summary>
+public sealed record IntroductionPrompt(string IntroducerName, string NewDeviceName, string Fingerprint);
+
 public enum PairOutcome { Paired, Rejected, Failed }
 
 /// <summary>Richiesta di invio in arrivo da un peer NON accoppiato: va confermata a mano.</summary>
@@ -101,6 +107,27 @@ public sealed class ClipboardTransport : IDisposable
 
     /// <summary>Chiamato quando un peer NON accoppiato ci manda qualcosa; ritorna true se l'utente accetta.</summary>
     public Func<IncomingOffer, bool>? OfferConfirm;
+
+    /// <summary>
+    /// Chiamato quando un dispositivo fidato ne presenta uno nuovo; ritorna true se
+    /// l'utente lo vuole nella propria cerchia. Senza questo, la mesh si allargava
+    /// da sola: bastava che UN dispositivo accoppiato fosse in mano a qualcun altro
+    /// perche' la sua chiave entrasse in tutti gli altri, in silenzio.
+    /// </summary>
+    /// <remarks>true = entra, false = non lo voglio, null = nessuna risposta (si riproporra').</remarks>
+    public Func<IntroductionPrompt, bool?>? IntroductionConfirm;
+
+    /// <summary>
+    /// Quando abbiamo proposto l'ultima volta un dispositivo. Il gossip ripassa ogni
+    /// tre secondi: senza questo, una proposta lasciata cadere tornerebbe subito.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, long> _introAsked = new();
+
+    /// <summary>Quanto aspettare prima di riproporre un dispositivo lasciato senza risposta.</summary>
+    private const long IntroRetryMs = 10 * 60 * 1000;
+
+    /// <summary>0/1: una sola richiesta di presentazione per volta.</summary>
+    private int _introDialogOpen;
 
     /// <summary>Un contenuto in arrivo e' stato riconosciuto come dannoso e scartato senza chiedere nulla.</summary>
     public event Action<string>? ContentBlocked;
@@ -279,7 +306,7 @@ public sealed class ClipboardTransport : IDisposable
     {
         var (name, port, gossip, work) = ParsePing(body);
         UpsertPeer(s.R.PeerDeviceId, name, remote, port, s.R.PeerPublicKeyDer, trusted, work);
-        if (trusted) ProcessGossip(gossip);
+        if (trusted) ProcessGossip(gossip, name);
         await WriteSessionAsync(stream, s.Cipher, BuildPing(), ct);
     }
 
@@ -431,7 +458,7 @@ public sealed class ClipboardTransport : IDisposable
             var (name, port, gossip, work) = ParsePing(reply[1..]);
             RememberIp(addr.ToString());
             UpsertPeer(s.R.PeerDeviceId, name, addr, port, s.R.PeerPublicKeyDer, trusted, work);
-            if (trusted) ProcessGossip(gossip);
+            if (trusted) ProcessGossip(gossip, name);
         }
         catch (Exception ex)
         {
@@ -810,27 +837,77 @@ public sealed class ClipboardTransport : IDisposable
     private sealed record GossipEntry(string DeviceId, string Name, string Ip, int Port, byte[] Pub);
 
     /// <summary>Su sessione fidata, adotta (introducer) i peer raccontati dal peer.</summary>
-    private void ProcessGossip(List<GossipEntry> gossip)
+    /// <summary>
+    /// I dispositivi che un peer fidato dice di conoscere.
+    ///
+    /// Fino alla 2.6.2 venivano fidati da soli: bastava che UN dispositivo
+    /// accoppiato finisse in mano a qualcun altro perche' la sua chiave entrasse
+    /// nella cerchia di tutti, in silenzio. Ora la presentazione e' solo una
+    /// proposta: chi entra lo decide l'utente, come per il pairing.
+    /// </summary>
+    private void ProcessGossip(List<GossipEntry> gossip, string introducerName)
     {
         foreach (var g in gossip)
         {
             if (g.DeviceId == _identity.DeviceId) continue;
 
-            // Un dispositivo revocato a mano non torna dentro da solo: senza questo
-            // controllo la revoca durava il tempo del ping successivo, perche' un
-            // altro peer della mesh lo riannunciava e lo si rifidava in automatico.
+            // Un dispositivo revocato a mano non torna dentro da solo, e nemmeno
+            // riproposto: la revoca si azzera solo con un pairing esplicito.
             if (_trust.IsRevoked(g.DeviceId))
             {
-                Log.Write($"[Mesh] introduzione ignorata, revocato: {g.Name} ({DeviceIdentity.ShortFingerprint(g.DeviceId)})");
+                Log.Write($"[Mesh] presentazione ignorata, revocato: {g.Name} ({DeviceIdentity.ShortFingerprint(g.DeviceId)})");
                 continue;
             }
 
             if (!_trust.IsTrusted(g.DeviceId) && g.Pub.Length > 0)
-            {
-                _trust.Trust(g.DeviceId, g.Name, g.Pub);
-                Log.Write($"[Mesh] introdotto e fidato: {g.Name} ({DeviceIdentity.ShortFingerprint(g.DeviceId)})");
-            }
+                ProposeIntroduction(g, introducerName);
+
             if (IPAddress.TryParse(g.Ip, out _)) RememberIp(g.Ip);
+        }
+    }
+
+    /// <summary>
+    /// Propone all'utente un dispositivo presentato da uno fidato. Si chiede una
+    /// volta sola: il gossip ripassa ogni tre secondi, e una finestra che ricompare
+    /// da sola si chiude senza leggerla.
+    /// </summary>
+    private void ProposeIntroduction(GossipEntry g, string introducerName)
+    {
+        if (IntroductionConfirm == null) return;
+
+        var now = Environment.TickCount64;
+        if (_introAsked.TryGetValue(g.DeviceId, out var last) && now - last < IntroRetryMs) return;
+        if (Interlocked.CompareExchange(ref _introDialogOpen, 1, 0) != 0) return; // una per volta
+        _introAsked[g.DeviceId] = now;
+
+        var fingerprint = DeviceIdentity.ShortFingerprint(g.DeviceId);
+        bool? answer;
+        try
+        {
+            answer = IntroductionConfirm(new IntroductionPrompt(introducerName, g.Name, fingerprint));
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"[Mesh] presentazione non mostrata: {ex.Message}");
+            return;
+        }
+        finally { Interlocked.Exchange(ref _introDialogOpen, 0); }
+
+        if (answer == true)
+        {
+            _trust.Trust(g.DeviceId, g.Name, g.Pub);
+            Log.Write($"[Mesh] presentato da {introducerName} e accettato: {g.Name} ({fingerprint})");
+        }
+        else if (answer == false)
+        {
+            // Un no vale come una revoca: resta scritto e non si ripropone piu',
+            // nemmeno dopo un riavvio. Si azzera accoppiando a mano, come sempre.
+            _trust.Revoke(g.DeviceId);
+            Log.Write($"[Mesh] presentato da {introducerName} e rifiutato: {g.Name} ({fingerprint})");
+        }
+        else
+        {
+            Log.Write($"[Mesh] presentazione senza risposta, si riproporra': {g.Name} ({fingerprint})");
         }
     }
 
