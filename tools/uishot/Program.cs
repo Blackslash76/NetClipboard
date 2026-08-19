@@ -83,11 +83,18 @@ internal static class Program
 
     // ----- Le finestre, con dati inventati -----
 
+    /// <summary>Cartella di stato usa e getta: le fotografie non devono leggere ne' toccare i dati veri.</summary>
+    private static readonly string ScratchDir = Directory.CreateDirectory(
+        Path.Combine(Path.GetTempPath(), "uishot-" + Guid.NewGuid().ToString("N")[..8])).FullName;
+
     private static AppConfig FakeConfig() => new()
     {
         DisplayName = "PC-UFFICIO-03",
         ManualPeers = new List<string> { "192.168.1.42", "192.168.1.51" },
         HistoryVisibleRows = 4,
+        // Senza questo la cronologia vera dell'utente veniva aperta, ripulita
+        // dalle voci scadute e — da quando i blob sono cifrati — anche riscritta.
+        StateDir = ScratchDir,
     };
 
     private static Form Recipient(int files, int dirs, int peers = 3)
@@ -199,8 +206,8 @@ internal static class Program
         var identity = DeviceIdentity.LoadOrCreate();
         // Archivio di fiducia su un percorso usa e getta: i dispositivi veri
         // dell'utente non devono finire in una fotografia.
-        var trust = new TrustStore(Path.Combine(Path.GetTempPath(), "uishot-trusted.json"));
-        var transport = new ClipboardTransport(FakeConfig(), identity, trust, new OfferStore());
+        var trust = new TrustStore(Path.Combine(ScratchDir, "trusted.json"));
+        var transport = new ClipboardTransport(FakeConfig(), identity, trust, new OfferStore(FakeConfig()));
         return new DevicesForm(identity, trust, transport);
     }
 

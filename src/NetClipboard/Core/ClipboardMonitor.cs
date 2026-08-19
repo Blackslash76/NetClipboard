@@ -112,9 +112,95 @@ public sealed class ClipboardMonitor : Form
         ClipboardChanged?.Invoke(payload);
     }
 
+    /// <summary>
+    /// Formati che i gestori di password mettono sulla clipboard per dire "questo
+    /// non va ne' registrato ne' propagato". Sono la convenzione con cui KeePass,
+    /// 1Password, Bitwarden e la cronologia di Windows si mettono d'accordo: chi
+    /// legge la clipboard e' tenuto a guardarli, non e' un dettaglio facoltativo.
+    ///
+    /// I primi due sono bandiere: la loro sola presenza vieta. Gli altri due sono
+    /// DWORD, e vietano quando valgono 0.
+    /// </summary>
+    private const string FmtViewerIgnore = "Clipboard Viewer Ignore";
+    private const string FmtExcludeMonitor = "ExcludeClipboardContentFromMonitorProcessing";
+    private const string FmtCanIncludeHistory = "CanIncludeInClipboardHistory";
+    private const string FmtCanUploadCloud = "CanUploadToCloudClipboard";
+
+    /// <summary>
+    /// True se chi ha copiato ha dichiarato il contenuto riservato.
+    ///
+    /// Senza questo controllo una password copiata da un gestore partiva in rete
+    /// verso tutti i dispositivi accoppiati e finiva in chiaro nella cronologia su
+    /// disco, dove restava giorni: la perdita di segreti piu' concreta che l'app
+    /// potesse causare, e per giunta senza che l'utente facesse nulla di sbagliato.
+    ///
+    /// Nel dubbio si tace: se i formati non sono leggibili si risponde di si'.
+    /// Perdere una copia e' una seccatura, spargere una password no.
+    /// </summary>
+    public static bool IsSecretClipboard()
+    {
+        try
+        {
+            var data = Clipboard.GetDataObject();
+            if (data == null) return false;
+
+            var formats = data.GetFormats(autoConvert: false);
+            if (formats.Any(f => string.Equals(f, FmtViewerIgnore, StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(f, FmtExcludeMonitor, StringComparison.OrdinalIgnoreCase)))
+                return true;
+
+            foreach (var name in new[] { FmtCanIncludeHistory, FmtCanUploadCloud })
+            {
+                if (!formats.Any(f => string.Equals(f, name, StringComparison.OrdinalIgnoreCase)))
+                    continue; // assente: nessun divieto, vale il comportamento normale
+                if (ReadDword(data, name) != 1)
+                    return true; // 0, oppure illeggibile: si tratta come divieto
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // La clipboard e' una risorsa contesa: se un altro processo la tiene
+            // aperta non si riesce nemmeno a elencare i formati. Rispondere "non
+            // e' segreto" qui vorrebbe dire far passare proprio il caso peggiore.
+            Debug.WriteLine($"[Clipboard] formati non leggibili: {ex.Message}");
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Legge un DWORD da un formato personalizzato. WinForms consegna i formati
+    /// che non conosce come <see cref="MemoryStream"/> sull'HGLOBAL; alcune
+    /// applicazioni passano direttamente un byte[]. -1 = non leggibile.
+    /// </summary>
+    private static int ReadDword(IDataObject data, string format)
+    {
+        try
+        {
+            var raw = data.GetData(format, autoConvert: false);
+            var bytes = raw switch
+            {
+                MemoryStream ms => ms.ToArray(),
+                byte[] b => b,
+                _ => null,
+            };
+            if (bytes is not { Length: >= 4 }) return -1;
+            return BitConverter.ToInt32(bytes, 0);
+        }
+        catch { return -1; }
+    }
+
     /// <summary>Legge la clipboard corrente. Da chiamare sul thread UI (STA).</summary>
     public ClipboardPayload? TryReadClipboard()
     {
+        // Prima di guardare qualunque contenuto: se e' roba di un gestore di
+        // password non deve nemmeno essere letta, tanto meno copiata altrove.
+        if (IsSecretClipboard())
+        {
+            Debug.WriteLine("[Clipboard] contenuto marcato come riservato: ignorato");
+            return null;
+        }
+
         try
         {
             if (Clipboard.ContainsFileDropList())
@@ -149,7 +235,7 @@ public sealed class ClipboardMonitor : Form
             {
                 var text = Clipboard.GetText();
                 if (!string.IsNullOrEmpty(text))
-                    return ClipboardPayload.FromText(text);
+                    return ClipboardPayload.FromRichText(text, ReadHtml(), ReadRtf());
             }
         }
         catch (Exception ex)
@@ -157,6 +243,31 @@ public sealed class ClipboardMonitor : Form
             Debug.WriteLine($"[Clipboard] lettura fallita: {ex.Message}");
         }
         return null;
+    }
+
+    /// <summary>
+    /// Frammento HTML sulla clipboard, se c'e'. Si legge il CF_HTML e se ne tiene
+    /// solo il frammento: l'intestazione la ricostruira' chi incolla.
+    /// </summary>
+    private static string? ReadHtml()
+    {
+        try
+        {
+            return Clipboard.ContainsText(TextDataFormat.Html)
+                ? CfHtml.ExtractFragment(Clipboard.GetText(TextDataFormat.Html))
+                : null;
+        }
+        catch { return null; } // la formattazione e' un di piu': se non si legge, pazienza
+    }
+
+    private static string? ReadRtf()
+    {
+        try
+        {
+            var rtf = Clipboard.ContainsText(TextDataFormat.Rtf) ? Clipboard.GetText(TextDataFormat.Rtf) : null;
+            return string.IsNullOrEmpty(rtf) ? null : rtf;
+        }
+        catch { return null; }
     }
 
     /// <summary>Applica testo/immagine alla clipboard sopprimendo l'eco. Thread UI.</summary>
@@ -168,7 +279,7 @@ public sealed class ClipboardMonitor : Form
             switch (payload.Kind)
             {
                 case PayloadKind.Text:
-                    Clipboard.SetText(payload.Text ?? "");
+                    SetText(payload);
                     break;
                 case PayloadKind.Image:
                     using (var ms = new MemoryStream(payload.ImagePng ?? Array.Empty<byte>()))
@@ -189,6 +300,32 @@ public sealed class ClipboardMonitor : Form
             col.AddRange(paths.ToArray());
             Clipboard.SetFileDropList(col);
         });
+    }
+
+    /// <summary>
+    /// Posa il testo con la formattazione che aveva, quando c'e'.
+    ///
+    /// Un solo <see cref="DataObject"/> con tutti i formati insieme: chi incolla
+    /// sceglie il piu' ricco che sa leggere, e chi sa leggere solo il testo trova
+    /// comunque il testo. Metterli con chiamate separate azzererebbe la clipboard
+    /// ogni volta, lasciando solo l'ultimo.
+    /// </summary>
+    private static void SetText(ClipboardPayload payload)
+    {
+        var text = payload.Text ?? "";
+        if (!payload.HasRichText)
+        {
+            Clipboard.SetText(text);
+            return;
+        }
+
+        var data = new DataObject();
+        data.SetData(DataFormats.UnicodeText, text);
+        if (payload.Html != null) data.SetData(DataFormats.Html, CfHtml.Build(payload.Html));
+        if (payload.Rtf != null) data.SetData(DataFormats.Rtf, payload.Rtf);
+        // copy: true — il contenuto deve restare in clipboard anche dopo che l'app
+        // si chiude, come per qualunque copia normale.
+        Clipboard.SetDataObject(data, copy: true);
     }
 
     private void Suppress(string? hash)

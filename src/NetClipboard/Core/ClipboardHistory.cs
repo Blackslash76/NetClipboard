@@ -1,6 +1,8 @@
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using NetClipboard.Core.Security;
 
 namespace NetClipboard.Core;
 
@@ -19,6 +21,15 @@ public sealed class HistoryItem
 
     // Immagine: nome del blob PNG in %AppData%\NetClipboard\history
     public string? BlobFile { get; set; }
+
+    /// <summary>
+    /// Nome del blob con la formattazione (HTML/RTF) del testo, se ce n'era.
+    ///
+    /// Sta fuori dall'indice perche' l'HTML di Word arriva a megabyte per un
+    /// paragrafo: dentro history.dat avrebbe fatto rileggere e riscrivere tutta la
+    /// cronologia a ogni copia. L'anteprima in elenco resta il testo, non il markup.
+    /// </summary>
+    public string? RichFile { get; set; }
 
     // File/cartelle (offer)
     public string? OfferId { get; set; }
@@ -86,6 +97,7 @@ public sealed class ClipboardHistory
     public static bool IsSpent(HistoryItem item) => item.Used || IsExpired(item);
 
     private readonly AppConfig _config;
+    private readonly LocalVault _vault;
     private readonly List<HistoryItem> _items = new();
     private readonly Dictionary<string, string> _hashToId = new();
     private readonly Lock _gate = new();
@@ -95,20 +107,24 @@ public sealed class ClipboardHistory
     public ClipboardHistory(AppConfig config)
     {
         _config = config;
+        _vault = new LocalVault(Path.Combine(config.StateDir, "history.key"));
         Load();
     }
 
-    private static string HistoryDir
+    private string HistoryDir
     {
         get
         {
-            var dir = Path.Combine(AppConfig.AppDataDir, "history");
+            var dir = Path.Combine(_config.StateDir, "history");
             Directory.CreateDirectory(dir);
             return dir;
         }
     }
 
-    private static string IndexPath => Path.Combine(HistoryDir, "history.json");
+    private string IndexPath => Path.Combine(HistoryDir, "history.dat");
+
+    /// <summary>Indice in chiaro delle versioni fino alla 2.7: si legge, non si scrive piu'.</summary>
+    private string LegacyIndexPath => Path.Combine(HistoryDir, "history.json");
 
     public IReadOnlyList<HistoryItem> Items
     {
@@ -136,6 +152,12 @@ public sealed class ClipboardHistory
                     existing.Origin = origin;
                     existing.IsLocal = isLocal;
                     existing.FromExternal = fromExternal;
+                    // L'hash del testo guarda solo il testo, quindi lo stesso
+                    // paragrafo ricopiato in grassetto finisce su questa voce: la
+                    // formattazione va aggiornata, non lasciata a quella di prima.
+                    // Vale anche al contrario — ricopiarlo in chiaro toglie il
+                    // vestito, perche' e' davvero cio' che c'e' in clipboard.
+                    if (payload.Kind == PayloadKind.Text) ReplaceRich(existing, payload);
                     _items.Insert(0, existing);
                     Persist();
                     Changed?.Invoke();
@@ -157,10 +179,12 @@ public sealed class ClipboardHistory
             {
                 case PayloadKind.Text:
                     item.Text = payload.Text;
+                    if (payload.HasRichText) WriteRich(item, payload);
                     break;
                 case PayloadKind.Image:
                     var blobName = item.Id + ".png";
-                    File.WriteAllBytes(Path.Combine(HistoryDir, blobName), payload.ImagePng ?? Array.Empty<byte>());
+                    File.WriteAllBytes(Path.Combine(HistoryDir, blobName),
+                        _vault.Seal(payload.ImagePng ?? Array.Empty<byte>()));
                     item.BlobFile = blobName;
                     break;
                 case PayloadKind.Files:
@@ -200,18 +224,89 @@ public sealed class ClipboardHistory
         }
     }
 
+    /// <summary>
+    /// Byte in chiaro dell'immagine di una voce, o null se non ci sono piu'.
+    ///
+    /// Unico punto di lettura dei blob, e per questo pubblico: le miniature della
+    /// cronologia leggevano il PNG direttamente da disco con Image.FromFile, e con
+    /// i blob cifrati avrebbero smesso di comparire senza dire niente.
+    /// </summary>
+    public byte[]? ReadBlob(HistoryItem item)
+    {
+        if (item.BlobFile == null) return null;
+        try
+        {
+            var path = Path.Combine(HistoryDir, item.BlobFile);
+            if (!File.Exists(path)) return null;
+            return _vault.Open(File.ReadAllBytes(path));
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Formattazione salvata accanto a una voce di testo.</summary>
+    private sealed class RichBlob
+    {
+        public string? Html { get; set; }
+        public string? Rtf { get; set; }
+    }
+
+    private void ReplaceRich(HistoryItem item, ClipboardPayload payload)
+    {
+        if (item.RichFile != null)
+        {
+            try
+            {
+                var old = Path.Combine(HistoryDir, item.RichFile);
+                if (File.Exists(old)) File.Delete(old);
+            }
+            catch { }
+            item.RichFile = null;
+        }
+        if (payload.HasRichText) WriteRich(item, payload);
+    }
+
+    private void WriteRich(HistoryItem item, ClipboardPayload payload)
+    {
+        try
+        {
+            var name = item.Id + ".rich";
+            File.WriteAllBytes(Path.Combine(HistoryDir, name), _vault.Seal(
+                JsonSerializer.SerializeToUtf8Bytes(new RichBlob { Html = payload.Html, Rtf = payload.Rtf })));
+            item.RichFile = name;
+        }
+        catch
+        {
+            // Senza formattazione la voce resta comunque incollabile come testo:
+            // non vale la pena far fallire l'inserimento in cronologia.
+        }
+    }
+
+    private RichBlob? ReadRich(HistoryItem item)
+    {
+        if (item.RichFile == null) return null;
+        try
+        {
+            var path = Path.Combine(HistoryDir, item.RichFile);
+            if (!File.Exists(path)) return null;
+            var plain = _vault.Open(File.ReadAllBytes(path));
+            return plain == null ? null : JsonSerializer.Deserialize<RichBlob>(plain);
+        }
+        catch { return null; }
+    }
+
     /// <summary>Solo per testo/immagine: ricostruisce il payload da rimettere in clipboard.</summary>
     public ClipboardPayload? ToPayload(HistoryItem item)
     {
         switch (item.Kind)
         {
             case PayloadKind.Text:
-                return ClipboardPayload.FromText(item.Text ?? "");
+                var rich = ReadRich(item);
+                return rich == null
+                    ? ClipboardPayload.FromText(item.Text ?? "")
+                    : ClipboardPayload.FromRichText(item.Text ?? "", rich.Html, rich.Rtf);
             case PayloadKind.Image:
-                if (item.BlobFile == null)
-                    return null;
-                var path = Path.Combine(HistoryDir, item.BlobFile);
-                return File.Exists(path) ? ClipboardPayload.FromImage(File.ReadAllBytes(path)) : null;
+                var png = ReadBlob(item);
+                return png != null ? ClipboardPayload.FromImage(png) : null;
             default:
                 return null; // i file si materializzano via fetch, non da qui
         }
@@ -352,34 +447,40 @@ public sealed class ClipboardHistory
         }
     }
 
-    private static void DeleteBlob(HistoryItem item)
+    private void DeleteBlob(HistoryItem item)
     {
-        try
+        foreach (var name in new[] { item.BlobFile, item.RichFile })
         {
-            if (item.BlobFile != null)
+            try
             {
-                var p = Path.Combine(HistoryDir, item.BlobFile);
+                if (name == null) continue;
+                var p = Path.Combine(HistoryDir, name);
                 if (File.Exists(p)) File.Delete(p);
             }
+            catch { }
         }
-        catch { }
     }
 
     private void Persist()
     {
         try
         {
-            File.WriteAllText(IndexPath, JsonSerializer.Serialize(_items));
+            File.WriteAllBytes(IndexPath, _vault.Seal(JsonSerializer.SerializeToUtf8Bytes(_items)));
+            // La copia in chiaro non deve sopravvivere alla prima scrittura: sarebbe
+            // l'elenco di tutto il testo passato, fermo li' per sempre.
+            if (File.Exists(LegacyIndexPath)) File.Delete(LegacyIndexPath);
         }
         catch { }
     }
 
     private void Load()
     {
+        var fromLegacy = !File.Exists(IndexPath) && File.Exists(LegacyIndexPath);
         try
         {
-            if (!File.Exists(IndexPath)) return;
-            var items = JsonSerializer.Deserialize<List<HistoryItem>>(File.ReadAllText(IndexPath));
+            var json = ReadIndexJson();
+            if (json == null) return;
+            var items = JsonSerializer.Deserialize<List<HistoryItem>>(json);
             if (items == null) return;
             _items.AddRange(items);
 
@@ -391,6 +492,53 @@ public sealed class ClipboardHistory
                     _hashToId[it.Hash] = it.Id;
         }
         catch { }
+        MigratePlainBlobs();
+        // Si riscrive subito, cifrato, invece di aspettare la prima copia: finche'
+        // l'indice in chiaro resta li' il problema che si voleva chiudere e' aperto,
+        // e su un'app che sta ferma potrebbe restarci per giorni.
+        if (fromLegacy) Persist();
         PurgeExpired();
+    }
+
+    /// <summary>
+    /// Indice, in chiaro, da dove si trova.
+    ///
+    /// Migrazione dalle versioni che non cifravano: si legge il vecchio
+    /// <c>history.json</c> e lo si tratta come valido. Non si scarta, perche' e'
+    /// cronologia dell'utente e buttarla via in silenzio sarebbe peggio del male;
+    /// sparisce da sola alla prima scrittura, che avviene cifrata.
+    ///
+    /// Un indice cifrato che non si apre, invece, si scarta: vuol dire che la
+    /// chiave non e' piu' quella, e non c'e' modo di recuperarlo.
+    /// </summary>
+    private string? ReadIndexJson()
+    {
+        if (File.Exists(IndexPath))
+        {
+            var plain = _vault.Open(File.ReadAllBytes(IndexPath));
+            return plain == null ? null : Encoding.UTF8.GetString(plain);
+        }
+        return File.Exists(LegacyIndexPath) ? File.ReadAllText(LegacyIndexPath) : null;
+    }
+
+    /// <summary>
+    /// Ricifra i PNG lasciati in chiaro dalle versioni precedenti. Si fa una volta
+    /// sola all'avvio: <see cref="LocalVault.Open"/> saprebbe comunque rileggerli,
+    /// ma finche' restano cosi' il problema che si voleva chiudere e' ancora li'.
+    /// </summary>
+    private void MigratePlainBlobs()
+    {
+        foreach (var it in _items.Where(i => i.BlobFile != null))
+        {
+            try
+            {
+                var path = Path.Combine(HistoryDir, it.BlobFile!);
+                if (!File.Exists(path)) continue;
+                var bytes = File.ReadAllBytes(path);
+                if (LocalVault.IsSealed(bytes)) continue;
+                File.WriteAllBytes(path, _vault.Seal(bytes));
+            }
+            catch { }
+        }
     }
 }

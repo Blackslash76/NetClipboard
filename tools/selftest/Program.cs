@@ -6,7 +6,9 @@
 // FileOffer o InstanceBridge.
 //
 //   dotnet run --project tools/selftest
+using System.Text;
 using NetClipboard.Core;
+using NetClipboard.Core.Security;
 
 var ok = 0; var ko = 0;
 void Check(string what, bool passed, string detail = "")
@@ -31,6 +33,80 @@ for (var i = 0; i < 2_000; i++)
     offer.Entries.Add(new FileEntry { RootIndex = i, Size = i, RelativePath = $"cartella/file-{i}.txt" });
 var got = ClipboardPayload.Deserialize(ClipboardPayload.FromOffer(offer).Serialize()).Offer!;
 Check("offerta con 2.000 voci", got.Entries.Count == 2_000 && got.Entries[1999].RelativePath == "cartella/file-1999.txt");
+
+var formatted = ClipboardPayload.FromRichText("testo", "<b>ciao</b>", @"{\rtf1 ciao}");
+var backRich = ClipboardPayload.Deserialize(formatted.Serialize());
+Check("testo con HTML e RTF in coda",
+    backRich.Text == "testo" && backRich.Html == "<b>ciao</b>" && backRich.Rtf == @"{\rtf1 ciao}");
+
+// Le code sono facoltative e chi legge non sa quante ne troverà: una di tipo
+// sconosciuto — una versione futura — si salta e si va avanti.
+{
+    using var ms = new MemoryStream();
+    using var w = new BinaryWriter(ms);
+    var t = Encoding.UTF8.GetBytes("testo");
+    w.Write((byte)1); w.Write(t.Length); w.Write(t);
+    w.Write((byte)99); w.Write(3); w.Write(new byte[] { 1, 2, 3 });   // coda mai vista
+    var h = Encoding.UTF8.GetBytes("<i>x</i>");
+    w.Write((byte)1); w.Write(h.Length); w.Write(h);                  // e dopo, una che si conosce
+    w.Flush();
+    var got2 = ClipboardPayload.Deserialize(ms.ToArray());
+    Check("coda di tipo sconosciuto: saltata, non fatale", got2.Text == "testo" && got2.Html == "<i>x</i>");
+}
+
+// L'HTML che Word mette in clipboard arriva a megabyte per un paragrafo: oltre il
+// tetto si degrada al testo semplice invece di gonfiare ogni invio.
+var huge = new string('a', ClipboardPayload.MaxRichBytes + 1);
+Check("HTML oltre il tetto: si degrada al testo",
+    ClipboardPayload.FromRichText("testo", huge, null).Html == null);
+
+Console.WriteLine();
+Console.WriteLine("== CF_HTML: gli scarti si contano in byte ==");
+
+// La trappola del formato: StartFragment/EndFragment sono scarti in BYTE sulla
+// codifica UTF-8. Con un frammento pieno di accenti e simboli, chi li contasse in
+// caratteri taglierebbe a meta' un tag, e chi incolla se ne accorgerebbe subito.
+{
+    const string frag = "<p>perché però €20 — città</p>";
+    var cf = CfHtml.Build(frag);
+    Check("frammento ricostruito identico", CfHtml.ExtractFragment(cf) == frag);
+
+    var declared = int.Parse(cf.Split("EndFragment:")[1][..10]);
+    Check("EndFragment cade sul byte giusto", declared == Encoding.UTF8.GetByteCount(cf.Split("<!--EndFragment-->")[0]),
+        $"dichiarato {declared}");
+
+    // Scarti incoerenti (capita, e non e' colpa di chi incolla): si ripiega sui
+    // commenti invece di restituire spazzatura.
+    var broken = cf.Replace("StartFragment:", "StartFragmenX:");
+    Check("scarti illeggibili: si ripiega sui commenti", CfHtml.ExtractFragment(broken) == frag);
+}
+
+Console.WriteLine();
+Console.WriteLine("== cronologia cifrata a riposo ==");
+
+{
+    var dir = Path.Combine(Path.GetTempPath(), "netclip-vault-" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(dir);
+    var vault = new LocalVault(Path.Combine(dir, "history.key"));
+
+    var secret = Encoding.UTF8.GetBytes("password: non deve stare in chiaro su disco");
+    var sealedBytes = vault.Seal(secret);
+    Check("il testo in chiaro non compare nel blob",
+        !Convert.ToHexString(sealedBytes).Contains(Convert.ToHexString(secret)));
+    Check("blob riaperto identico", vault.Open(sealedBytes)!.SequenceEqual(secret));
+    Check("la stessa chiave si ritrova dopo un riavvio",
+        new LocalVault(Path.Combine(dir, "history.key")).Open(sealedBytes)!.SequenceEqual(secret));
+
+    // File di una versione precedente: niente firma, si rileggono com'erano.
+    Check("file in chiaro di prima: ancora leggibile", vault.Open(secret)!.SequenceEqual(secret));
+
+    // Blob manomesso: AES-GCM non lo apre, e non si finge di poterlo fare.
+    var tampered = sealedBytes.ToArray();
+    tampered[^1] ^= 0xFF;
+    Check("blob manomesso: rifiutato", vault.Open(tampered) == null);
+
+    try { Directory.Delete(dir, true); } catch { }
+}
 
 Console.WriteLine();
 Console.WriteLine("== dati ostili: devono essere rifiutati senza allocare ==");
@@ -66,6 +142,23 @@ foreach (var n in new[] { 10_000_000, int.MaxValue })
     var rejected = false;
     try { ClipboardPayload.Deserialize(data); } catch (InvalidDataException) { rejected = true; }
     Check($"offerta che dichiara {n} voci", rejected);
+}
+
+// Le code del testo arrivano dalla rete come tutto il resto: anche la loro
+// lunghezza va confrontata con lo spazio reale, o il buco si riapre da li'.
+{
+    using var ms = new MemoryStream();
+    using var w = new BinaryWriter(ms);
+    var t = Encoding.UTF8.GetBytes("ok");
+    w.Write((byte)1); w.Write(t.Length); w.Write(t);
+    w.Write((byte)1); w.Write(600 * 1024 * 1024); w.Write(new byte[4]);
+    w.Flush();
+    var data = ms.ToArray();
+    var before = GC.GetTotalAllocatedBytes();
+    var rejected = false;
+    try { ClipboardPayload.Deserialize(data); } catch (InvalidDataException) { rejected = true; }
+    var mb = (GC.GetTotalAllocatedBytes() - before) / 1048576.0;
+    Check("coda HTML che dichiara 600 MB", rejected && mb < 1, $"allocati {mb:0.00} MB");
 }
 
 Console.WriteLine();

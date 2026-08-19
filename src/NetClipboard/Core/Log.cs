@@ -8,7 +8,16 @@ public static class Log
     private static readonly Lock Gate = new();
     private const long MaxBytes = 1024 * 1024; // 1 MB, poi si azzera
 
-    public static string FilePath => Path.Combine(AppConfig.AppDataDir, "log.txt");
+    private static string? _override;
+
+    public static string FilePath => _override ?? Path.Combine(AppConfig.AppDataDir, "log.txt");
+
+    /// <summary>
+    /// Manda il log altrove. Serve al banco di prova end-to-end, che tiene piu'
+    /// istanze nello stesso processo e non deve scrivere nel log dell'applicazione
+    /// di chi sta lavorando.
+    /// </summary>
+    public static void Redirect(string path) => _override = path;
 
     public static void Start(string header)
     {

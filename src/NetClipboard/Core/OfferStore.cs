@@ -16,9 +16,20 @@ public sealed class OfferStore
     private readonly ConcurrentDictionary<Guid, FileOffer> _offers = new();
     private readonly Lock _gate = new();
 
-    public OfferStore() => Load();
+    private readonly string _path;
 
-    private static string StorePath => Path.Combine(AppConfig.AppDataDir, "offers.json");
+    /// <summary>
+    /// La cartella arriva dalla configurazione e non da <see cref="AppConfig.AppDataDir"/>:
+    /// il banco di prova end-to-end tiene due istanze nello stesso processo, e con
+    /// un percorso solo si sovrascriverebbero le offerte a vicenda.
+    /// </summary>
+    public OfferStore(AppConfig config)
+    {
+        _path = Path.Combine(config.StateDir, "offers.json");
+        Load();
+    }
+
+    private string StorePath => _path;
 
     public void Register(FileOffer offer)
     {

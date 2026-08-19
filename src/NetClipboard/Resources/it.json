@@ -28,6 +28,7 @@
 
   "msg.networkRestarted": "Rete riavviata.",
   "msg.contentGone": "Contenuto non più disponibile.",
+  "msg.secretContent": "Il programma che l'ha copiato lo ha marcato come riservato: non viene condiviso né registrato.",
   "msg.originalsGone": "I file originali non sono più disponibili.",
   "msg.ownerOffline": "{0} non è in linea.",
   "msg.ownerNotAllowed": "Il permesso per questi file non è più valido: chiedi a {0} di rimandarli.",

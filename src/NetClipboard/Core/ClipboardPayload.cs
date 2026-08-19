@@ -18,19 +18,63 @@ public enum PayloadKind : byte
 ///
 /// Serializzazione binaria:
 ///   [kind:1]
-///   Text  -> [len:4][utf8]
+///   Text  -> [len:4][utf8]  poi, facoltativi, [tag:1][len:4][utf8]...
 ///   Image -> [len:4][png bytes]
 ///   Files -> FileOffer.WriteTo
+///
+/// Le code del testo (HTML, RTF) sono aggiunte <b>in fondo</b> di proposito, e non
+/// con un <see cref="PayloadKind"/> nuovo: un peer di versione precedente si ferma
+/// dopo il testo senza guardare se il buffer e' finito, quindi le ignora e riceve
+/// comunque il contenuto. Un tipo sconosciuto, invece, gli farebbe sollevare
+/// "Tipo payload sconosciuto" e chiudere la connessione.
 /// </summary>
 public sealed class ClipboardPayload
 {
+    /// <summary>Etichette delle code facoltative del testo. Una sconosciuta si salta, non fa errore.</summary>
+    private const byte TagHtml = 1;
+    private const byte TagRtf = 2;
+
+    /// <summary>
+    /// Tetto per i formati ricchi. L'HTML che Word mette in clipboard puo' pesare
+    /// megabyte per un paragrafo: oltre questa soglia si degrada al testo semplice,
+    /// che e' cio' che serviva, invece di gonfiare ogni invio.
+    /// </summary>
+    public const int MaxRichBytes = 2 * 1024 * 1024;
+
     public PayloadKind Kind { get; init; }
     public string? Text { get; init; }
+
+    /// <summary>Frammento HTML (senza intestazione CF_HTML), se il contenuto ne aveva uno.</summary>
+    public string? Html { get; init; }
+
+    /// <summary>Testo RTF, se il contenuto ne aveva uno.</summary>
+    public string? Rtf { get; init; }
+
     public byte[]? ImagePng { get; init; }
     public FileOffer? Offer { get; init; }
 
+    /// <summary>True se c'e' formattazione da preservare oltre al testo nudo.</summary>
+    public bool HasRichText => Html != null || Rtf != null;
+
     public static ClipboardPayload FromText(string text) =>
         new() { Kind = PayloadKind.Text, Text = text };
+
+    /// <summary>
+    /// Testo con la sua formattazione. Le code oltre <see cref="MaxRichBytes"/> si
+    /// lasciano cadere qui, in un punto solo, cosi' il tetto vale per chiunque
+    /// costruisca un payload.
+    /// </summary>
+    public static ClipboardPayload FromRichText(string text, string? html, string? rtf) =>
+        new()
+        {
+            Kind = PayloadKind.Text,
+            Text = text,
+            Html = WithinCap(html),
+            Rtf = WithinCap(rtf),
+        };
+
+    private static string? WithinCap(string? s) =>
+        string.IsNullOrEmpty(s) || Encoding.UTF8.GetByteCount(s) > MaxRichBytes ? null : s;
 
     public static ClipboardPayload FromImage(byte[] png) =>
         new() { Kind = PayloadKind.Image, ImagePng = png };
@@ -49,6 +93,8 @@ public sealed class ClipboardPayload
                 var tb = Encoding.UTF8.GetBytes(Text ?? "");
                 w.Write(tb.Length);
                 w.Write(tb);
+                WriteTail(w, TagHtml, Html);
+                WriteTail(w, TagRtf, Rtf);
                 break;
             case PayloadKind.Image:
                 var img = ImagePng ?? Array.Empty<byte>();
@@ -71,7 +117,7 @@ public sealed class ClipboardPayload
         switch (kind)
         {
             case PayloadKind.Text:
-                return FromText(Encoding.UTF8.GetString(r.ReadBytes(ReadLength(r))));
+                return ReadText(r);
             case PayloadKind.Image:
                 return FromImage(r.ReadBytes(ReadLength(r)));
             case PayloadKind.Files:
@@ -79,6 +125,41 @@ public sealed class ClipboardPayload
             default:
                 throw new InvalidDataException($"Tipo payload sconosciuto: {(byte)kind}");
         }
+    }
+
+    private static void WriteTail(BinaryWriter w, byte tag, string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return;
+        var bytes = Encoding.UTF8.GetBytes(value);
+        w.Write(tag);
+        w.Write(bytes.Length);
+        w.Write(bytes);
+    }
+
+    /// <summary>
+    /// Testo piu' le code che ci fossero. Si legge finche' ci sono byte: chi manda
+    /// non dichiara quante code ha messo, e non deve — chi non le capisce si ferma
+    /// prima e chi le capisce le trova qui.
+    /// </summary>
+    private static ClipboardPayload ReadText(BinaryReader r)
+    {
+        var text = Encoding.UTF8.GetString(r.ReadBytes(ReadLength(r)));
+        string? html = null, rtf = null;
+        while (r.BaseStream.Position < r.BaseStream.Length)
+        {
+            var tag = r.ReadByte();
+            // ReadLength serve anche qui: la coda arriva dalla rete come tutto il
+            // resto, e una lunghezza inventata alloca prima di fallire.
+            var value = Encoding.UTF8.GetString(r.ReadBytes(ReadLength(r)));
+            switch (tag)
+            {
+                case TagHtml: html = value; break;
+                case TagRtf: rtf = value; break;
+                // Coda di una versione futura: si salta e si va avanti. Ignorarla
+                // e' esattamente cio' che ci si aspetta da noi.
+            }
+        }
+        return FromRichText(text, html, rtf);
     }
 
     /// <summary>
@@ -116,6 +197,15 @@ public sealed class ClipboardPayload
                 sb.Append('|').Append(e.RelativePath).Append(':').Append(e.Size);
             bytes = Encoding.UTF8.GetBytes(sb.ToString());
         }
+        else if (Kind == PayloadKind.Text)
+        {
+            // Solo il testo, non la formattazione. Due motivi: ricopiare lo stesso
+            // paragrafo da due programmi diversi e' la stessa cosa per chi guarda
+            // l'elenco; e la soppressione dell'eco confronta cio' che rimettiamo in
+            // clipboard con cio' che rileggiamo, e l'HTML non torna indietro
+            // identico al byte — bastava quello per riaprire il ping-pong.
+            bytes = FromText(Text ?? "").Serialize();
+        }
         else
         {
             bytes = Serialize();
@@ -127,7 +217,7 @@ public sealed class ClipboardPayload
     {
         return Kind switch
         {
-            PayloadKind.Text => (Text?.Length ?? 0) * 2L,
+            PayloadKind.Text => ((Text?.Length ?? 0) + (Html?.Length ?? 0) + (Rtf?.Length ?? 0)) * 2L,
             PayloadKind.Image => ImagePng?.Length ?? 0,
             PayloadKind.Files => Offer?.TotalSize ?? 0,
             _ => 0,

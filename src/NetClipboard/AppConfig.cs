@@ -93,6 +93,18 @@ public sealed class AppConfig
 
     // ----- Percorsi -----
 
+    /// <summary>
+    /// Cartella in cui questa istanza tiene il proprio stato (offerte, permessi,
+    /// cronologia, fiducia). Di norma e' <see cref="AppDataDir"/>.
+    ///
+    /// E' una proprieta' d'istanza e non una costante perche' il banco di prova
+    /// end-to-end tiene due trasporti nello stesso processo: con una cartella sola
+    /// si sovrascriverebbero a vicenda i file di stato. Non si salva nella
+    /// configurazione: e' un fatto dell'esecuzione, non una preferenza.
+    /// </summary>
+    [JsonIgnore]
+    public string StateDir { get; set; } = AppDataDir;
+
     public static string AppDataDir
     {
         get
@@ -105,7 +117,8 @@ public sealed class AppConfig
         }
     }
 
-    private static string ConfigPath => Path.Combine(AppDataDir, "config.json");
+    /// <summary>Da dove si legge la configurazione all'avvio: sempre la cartella dell'utente.</summary>
+    private static string DefaultConfigPath => Path.Combine(AppDataDir, "config.json");
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -119,9 +132,9 @@ public sealed class AppConfig
     {
         try
         {
-            if (File.Exists(ConfigPath))
+            if (File.Exists(DefaultConfigPath))
             {
-                var json = File.ReadAllText(ConfigPath);
+                var json = File.ReadAllText(DefaultConfigPath);
                 var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts);
                 if (cfg != null)
                 {
@@ -144,7 +157,10 @@ public sealed class AppConfig
         try
         {
             var json = JsonSerializer.Serialize(this, JsonOpts);
-            File.WriteAllText(ConfigPath, json);
+            // Nella propria cartella di stato, non in quella dell'applicazione: il
+            // banco di prova salva la cache degli IP come fa l'app vera, e non deve
+            // riscrivere la configurazione di chi sta lavorando.
+            File.WriteAllText(Path.Combine(StateDir, "config.json"), json);
         }
         catch
         {

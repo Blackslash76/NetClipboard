@@ -151,16 +151,15 @@ public sealed class ClipboardTransport : IDisposable
     /// Permessi di prelievo file concessi uno per uno: "il dispositivo X può
     /// scaricare l'offerta Y fino all'istante Z". Servono perché un invio a un
     /// non accoppiato possa contenere file senza aprire OpFetch a chiunque.
-    /// Il valore e' l'istante della concessione (Environment.TickCount64).
     /// </summary>
-    private readonly ConcurrentDictionary<string, long> _fetchGrants = new();
+    private readonly GrantStore _fetchGrants;
 
     /// <summary>
     /// L'altra faccia di <see cref="_fetchGrants"/>: le offerte che NOI abbiamo
     /// accettato da un peer non accoppiato. Senza questo elenco il prelievo dei
     /// file si fermerebbe, perché FetchAsync pretende un peer fidato.
     /// </summary>
-    private readonly ConcurrentDictionary<string, long> _acceptedOffers = new();
+    private readonly GrantStore _acceptedOffers;
 
     /// <summary>Ultima richiesta di invio per peer, per non farsi tempestare di finestre.</summary>
     private readonly ConcurrentDictionary<string, long> _lastOfferAt = new();
@@ -176,6 +175,10 @@ public sealed class ClipboardTransport : IDisposable
         _identity = identity;
         _trust = trust;
         _offerStore = offerStore;
+        // Su disco, e non solo in memoria: fra l'accettazione e l'incolla possono
+        // passare minuti, e un riavvio dell'app non deve mangiarsi i file.
+        _fetchGrants = new GrantStore(Path.Combine(config.StateDir, "grants.json"), GrantLifetime);
+        _acceptedOffers = new GrantStore(Path.Combine(config.StateDir, "accepted.json"), GrantLifetime);
     }
 
     public IReadOnlyCollection<Peer> Peers => _peers.Values.ToList();
@@ -367,7 +370,7 @@ public sealed class ClipboardTransport : IDisposable
         // Se sono file, il contenuto non è ancora arrivato: va annotato il permesso
         // di andarselo a prendere, altrimenti il prelievo verrebbe rifiutato.
         if (accepted && payload.Kind == PayloadKind.Files && payload.Offer != null)
-            _acceptedOffers[GrantKey(s.R.PeerDeviceId, payload.Offer.OfferId)] = Environment.TickCount64;
+            _acceptedOffers.Grant(s.R.PeerDeviceId, payload.Offer.OfferId);
 
         await WriteSessionAsync(stream, s.Cipher, new[] { accepted ? (byte)1 : (byte)0 }, ct);
         Log.Write($"[Transport] invio da {label}: {(accepted ? "accettato" : "rifiutato")}");
@@ -379,7 +382,7 @@ public sealed class ClipboardTransport : IDisposable
     /// che autorizza a prelevarne i file pur non avendolo mai accoppiato.
     /// </summary>
     public bool HasAcceptedOffer(string deviceId, Guid offerId) =>
-        StillValid(_acceptedOffers, GrantKey(deviceId, offerId));
+        _acceptedOffers.IsValid(deviceId, offerId);
 
     /// <summary>
     /// Analizza cio' che e' gia' arrivato. Per i file non c'e' ancora nulla da
@@ -392,23 +395,8 @@ public sealed class ClipboardTransport : IDisposable
         _ => ScanVerdict.NotScanned,
     };
 
-    private static string GrantKey(string deviceId, Guid offerId) => deviceId + ":" + offerId.ToString("N");
-
     private bool IsGranted(string deviceId, Guid offerId) =>
-        StillValid(_fetchGrants, GrantKey(deviceId, offerId));
-
-    /// <summary>
-    /// Permesso valido solo dentro la finestra. La scadenza si verifica in lettura
-    /// e la voce si toglie li' per li': niente timer di pulizia, e un permesso
-    /// scaduto non puo' tornare buono per una svista.
-    /// </summary>
-    private static bool StillValid(ConcurrentDictionary<string, long> map, string key)
-    {
-        if (!map.TryGetValue(key, out var granted)) return false;
-        if (Environment.TickCount64 - granted <= (long)GrantLifetime.TotalMilliseconds) return true;
-        map.TryRemove(key, out _);
-        return false;
-    }
+        _fetchGrants.IsValid(deviceId, offerId);
 
     // ===================== CLIENT =====================
 
@@ -437,14 +425,24 @@ public sealed class ClipboardTransport : IDisposable
         catch (OperationCanceledException) { }
     }
 
-    private async Task PingAsync(IPAddress addr, CancellationToken ct, int timeoutMs = 3000)
+    /// <summary>
+    /// Contatta subito un endpoint preciso, senza aspettare il giro di ping.
+    ///
+    /// La porta e' esplicita perche' il giro automatico presume che tutti stiano
+    /// sulla stessa: vero in rete, falso quando due istanze convivono nello stesso
+    /// processo (il banco di prova end-to-end).
+    /// </summary>
+    public Task PingNowAsync(IPAddress addr, int port, CancellationToken ct = default) =>
+        PingAsync(addr, ct, toPort: port);
+
+    private async Task PingAsync(IPAddress addr, CancellationToken ct, int timeoutMs = 3000, int? toPort = null)
     {
         try
         {
             using var client = new TcpClient();
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeoutMs);
-            await client.ConnectAsync(addr, _config.Port, cts.Token);
+            await client.ConnectAsync(addr, toPort ?? _config.Port, cts.Token);
             await using var stream = client.GetStream();
 
             var s = await ClientHandshakeAsync(stream, cts.Token);
@@ -486,7 +484,7 @@ public sealed class ClipboardTransport : IDisposable
         // è la stessa mesh, si usa il percorso normale.
         var op = peer.Trusted ? OpPush : OpOffer;
         if (payload.Kind == PayloadKind.Files && payload.Offer != null && !peer.Trusted)
-            _fetchGrants[GrantKey(peer.DeviceId, payload.Offer.OfferId)] = Environment.TickCount64;
+            _fetchGrants.Grant(peer.DeviceId, payload.Offer.OfferId);
 
         try
         {
@@ -504,14 +502,14 @@ public sealed class ClipboardTransport : IDisposable
             var reply = await ReadSessionAsync(stream, s.Cipher, cts.Token);
             var accepted = reply is { Length: > 0 } && reply[0] == 1;
             if (!accepted && payload.Offer != null)
-                _fetchGrants.TryRemove(GrantKey(peer.DeviceId, payload.Offer.OfferId), out _);
+                _fetchGrants.Revoke(peer.DeviceId, payload.Offer.OfferId);
             return accepted ? SendOutcome.Delivered : SendOutcome.Declined;
         }
         catch (Exception ex)
         {
             Log.Write($"[Transport] invio a {peer.Label} fallito: {ex.Message}");
             if (payload.Offer != null)
-                _fetchGrants.TryRemove(GrantKey(peer.DeviceId, payload.Offer.OfferId), out _);
+                _fetchGrants.Revoke(peer.DeviceId, payload.Offer.OfferId);
             return SendOutcome.Failed;
         }
     }
@@ -626,7 +624,7 @@ public sealed class ClipboardTransport : IDisposable
         // proprio questa offerta. In entrambi i casi dev'essere il dispositivo atteso.
         if (s == null || s.R.PeerDeviceId != owner.DeviceId ||
             (!_trust.Matches(s.R.PeerDeviceId, s.R.PeerPublicKeyDer) &&
-             !_acceptedOffers.ContainsKey(GrantKey(s.R.PeerDeviceId, offerId))))
+             !_acceptedOffers.IsValid(s.R.PeerDeviceId, offerId)))
             throw new IOException(L.T("error.notTrusted"));
 
         await WriteSessionAsync(stream, s.Cipher, Concat(new[] { OpFetch }, offerId.ToByteArray()), ct);

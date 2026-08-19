@@ -22,3 +22,13 @@ jobs:
       - name: Controlla i cataloghi delle lingue
         shell: pwsh
         run: pwsh tools/check-strings.ps1
+
+      # I due banchi escono con codice 1 se un controllo fallisce, quindi fanno da
+      # guardia da soli. Il primo esercita i parser di rete con dati ostili, il
+      # secondo tiene nove istanze del trasporto nello stesso processo e le fa
+      # parlare davvero su loopback: pairing, invii, prelievo di file, revoche.
+      - name: Prove di tenuta
+        run: dotnet run --project tools/selftest -c Release
+
+      - name: Prova end-to-end fra istanze
+        run: dotnet run --project tools/e2e -c Release

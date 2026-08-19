@@ -64,7 +64,7 @@ public sealed class TrayContext : ApplicationContext
                   $"fidati: {_trust.All.Count}");
         Updater.CleanupOld();
 
-        _offerStore = new OfferStore();
+        _offerStore = new OfferStore(_config);
         _history = new ClipboardHistory(_config);
         ClipboardHistory.CleanupReceived(_config.HistoryMaxAgeDays);
 
@@ -464,7 +464,13 @@ public sealed class TrayContext : ApplicationContext
     private void SendCurrentClipboard()
     {
         var payload = _monitor.TryReadClipboard();
-        if (payload == null) return;
+        // Un invio a mano non scavalca il divieto del gestore di password: se il
+        // contenuto e' marcato riservato si dice perche', invece di non far nulla.
+        if (payload == null)
+        {
+            Balloon(L.T("app.name"), L.T(ClipboardMonitor.IsSecretClipboard() ? "msg.secretContent" : "msg.contentGone"));
+            return;
+        }
         if (payload.Kind == PayloadKind.Files && payload.Offer != null) _offerStore.Register(payload.Offer);
         if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
 
@@ -629,7 +635,11 @@ public sealed class TrayContext : ApplicationContext
     private async Task SendToAsync(Peer peer)
     {
         var payload = _monitor.TryReadClipboard();
-        if (payload == null) { Balloon(L.T("app.name"), L.T("msg.contentGone")); return; }
+        if (payload == null)
+        {
+            Balloon(L.T("app.name"), L.T(ClipboardMonitor.IsSecretClipboard() ? "msg.secretContent" : "msg.contentGone"));
+            return;
+        }
         if (payload.Kind == PayloadKind.Files && payload.Offer != null) _offerStore.Register(payload.Offer);
         if (payload.Kind != PayloadKind.Files && ExceedsSize(payload)) { WarnSizeOnce(); return; }
         await SendPayloadToAsync(peer, payload);

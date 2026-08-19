@@ -396,9 +396,12 @@ public sealed class HistoryForm : Form
         if (_thumbCache.TryGetValue(key, out var cached)) return cached;
         try
         {
-            var path = Path.Combine(AppConfig.AppDataDir, "history", item.BlobFile);
-            if (!File.Exists(path)) return null;
-            using var src = Image.FromFile(path);
+            // I blob sono cifrati a riposo: si passa dalla cronologia, che ha la
+            // chiave. Image.FromFile qui non funzionerebbe piu'.
+            var png = _history.ReadBlob(item);
+            if (png == null) return null;
+            using var ms = new MemoryStream(png);
+            using var src = Image.FromStream(ms);
             var thumb = new Bitmap(size, size);
             using (var g = Graphics.FromImage(thumb))
             {
