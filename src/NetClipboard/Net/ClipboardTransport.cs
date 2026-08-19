@@ -740,9 +740,34 @@ public sealed class ClipboardTransport : IDisposable
     {
         var isNew = !_peers.ContainsKey(deviceId);
         _peers.AddOrUpdate(deviceId,
-            _ => new Peer { DeviceId = deviceId, Name = name, Address = addr, Port = port, PublicKeyDer = pub, Trusted = trusted, Work = work },
-            (_, p) => { p.Name = name; p.Address = addr; p.Port = port; p.PublicKeyDer = pub; p.Trusted = trusted; p.LastSeenUtc = DateTime.UtcNow; if (work != null) p.Work = work; return p; });
+            _ => new Peer { DeviceId = deviceId, Name = name, Address = addr, Port = port, PublicKeyDer = pub, Trusted = trusted, Work = work, CustomLabel = CustomLabelOf(deviceId) },
+            (_, p) => { p.Name = name; p.Address = addr; p.Port = port; p.PublicKeyDer = pub; p.Trusted = trusted; p.LastSeenUtc = DateTime.UtcNow; p.CustomLabel = CustomLabelOf(deviceId); if (work != null) p.Work = work; return p; });
         if (isNew) Log.Write($"[Transport] peer: {name} @ {addr} {(trusted ? "[FIDATO]" : "[non fidato]")}");
+        PeersChanged?.Invoke();
+    }
+
+    private string? CustomLabelOf(string deviceId) =>
+        _config.DeviceLabels.TryGetValue(deviceId, out var l) && !string.IsNullOrWhiteSpace(l) ? l : null;
+
+    /// <summary>
+    /// Nome da mostrare per un dispositivo che potrebbe non essere in rete adesso
+    /// (per esempio un fidato spento): l'etichetta scelta qui, altrimenti quella data.
+    /// </summary>
+    public string LabelFor(string deviceId, string fallback) => CustomLabelOf(deviceId) ?? fallback;
+
+    /// <summary>
+    /// Ribattezza un dispositivo su questo PC. Etichetta vuota = si torna al nome
+    /// che il dispositivo dichiara. Non viaggia sulla rete: e' una nota nostra.
+    /// </summary>
+    public void SetCustomLabel(string deviceId, string? label)
+    {
+        label = label?.Trim();
+        if (string.IsNullOrEmpty(label)) _config.DeviceLabels.Remove(deviceId);
+        else _config.DeviceLabels[deviceId] = label;
+        _config.Save();
+
+        if (_peers.TryGetValue(deviceId, out var peer))
+            peer.CustomLabel = CustomLabelOf(deviceId);
         PeersChanged?.Invoke();
     }
 

@@ -23,7 +23,6 @@ public sealed class SettingsForm : ScaledForm
 
     private readonly AppConfig _config;
 
-    private readonly TextBox _name = new();
     private readonly NumericUpDown _port = new() { Minimum = 1024, Maximum = 65535 };
     private readonly NumericUpDown _historySize = new() { Minimum = 5, Maximum = 200 };
     private readonly NumericUpDown _visibleRows = new()
@@ -53,7 +52,6 @@ public sealed class SettingsForm : ScaledForm
     private readonly Button _ok = new();
     private readonly Button _cancel = new();
 
-    private readonly Label _lblName = new();
     private readonly Label _lblPort = new();
     private readonly Label _lblHistory = new();
     private readonly Label _lblVisibleRows = new();
@@ -92,7 +90,6 @@ public sealed class SettingsForm : ScaledForm
     private void ApplyTexts()
     {
         Text = L.T("settings.title");
-        _lblName.Text = L.T("settings.name");
         _lblPort.Text = L.T("settings.port");
         _lblHistory.Text = L.T("settings.historySize");
         _lblVisibleRows.Text = L.T("settings.visibleRows");
@@ -166,7 +163,6 @@ public sealed class SettingsForm : ScaledForm
 
         Controls.AddRange(new Control[]
         {
-            _lblName, _name,
             _lblPort, _port,
             _lblHistory, _historySize,
             _lblVisibleRows, _visibleRows,
@@ -198,12 +194,13 @@ public sealed class SettingsForm : ScaledForm
             y += RowH;
         }
 
-        Row(_lblName, _name, fieldW);
-        Row(_lblPort, _port, 110);
-        Row(_lblHistory, _historySize, 110);
-        Row(_lblVisibleRows, _visibleRows, 110);
-        Row(_lblAge, _maxAgeDays, 110);
-        Row(_lblSize, _maxMb, 110);
+        // Larghezza per le cifre che possono davvero comparire, non una taglia unica:
+        // un campo largo il doppio del suo contenuto sembra aspettarsi altro.
+        Row(_lblPort, _port, 74);          // 45654
+        Row(_lblHistory, _historySize, 64);  // 200
+        Row(_lblVisibleRows, _visibleRows, 58);  // 8
+        Row(_lblAge, _maxAgeDays, 68);     // 3650
+        Row(_lblSize, _maxMb, 68);         // 2048
 
         // Riga "Condividi": tre checkbox in fila, larghezza dettata dal testo.
         _lblShare.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
@@ -287,7 +284,6 @@ public sealed class SettingsForm : ScaledForm
 
     private void LoadFromConfig()
     {
-        _name.Text = _config.DisplayName;
         _port.Value = Math.Clamp(_config.Port, 1024, 65535);
         _historySize.Value = Math.Clamp(_config.HistorySize, 5, 200);
         _visibleRows.Value = Math.Clamp(_config.HistoryVisibleRows,
@@ -307,7 +303,6 @@ public sealed class SettingsForm : ScaledForm
 
     private void SaveToConfig()
     {
-        _config.DisplayName = string.IsNullOrWhiteSpace(_name.Text) ? Environment.MachineName : _name.Text.Trim();
         _config.Port = (int)_port.Value;
         _config.HistorySize = (int)_historySize.Value;
         _config.HistoryVisibleRows = (int)_visibleRows.Value;

@@ -156,6 +156,8 @@ public sealed class IncomingOfferDialog : ScaledForm
         _title.Font = PxFont("Segoe UI Semibold", 16f);
         _preview.Font = PxFont("Segoe UI", 12f);
         _scan.Font = PxFont("Segoe UI Semibold", 11.5f);
+        _refuse.Font = PxFont("Segoe UI", 13f);
+        _accept.Font = PxFont("Segoe UI Semibold", 13f);
 
         var full = ClientW - 2 * Pad;
         var y = 18;

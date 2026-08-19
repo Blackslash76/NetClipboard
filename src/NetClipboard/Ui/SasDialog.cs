@@ -95,6 +95,8 @@ public sealed class SasDialog : ScaledForm
     protected override void ApplyLayout()
     {
         _title.Font = PxFont("Segoe UI Semibold", 16f);
+        _cancel.Font = PxFont("Segoe UI", 13f);
+        _ok.Font = PxFont("Segoe UI Semibold", 13f);
 
         var full = ClientW - 2 * Pad;
         var y = 18;

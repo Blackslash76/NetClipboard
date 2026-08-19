@@ -27,8 +27,16 @@ public sealed class Peer
     /// </summary>
     public Core.Identity.WorkIdentity? Work { get; set; }
 
-    /// <summary>Come chiamare questo peer nell'interfaccia: la persona se c'è, altrimenti la macchina.</summary>
-    public string Label => Work != null ? $"{Work.Label} · {Name}" : Name;
+    /// <summary>
+    /// Etichetta scelta dall'utente su QUESTO PC per questo dispositivo. Vive nella
+    /// configurazione locale (AppConfig.DeviceLabels) e vince su tutto il resto:
+    /// nome macchina e identità dichiarata arrivano dalla rete, questa no.
+    /// </summary>
+    public string? CustomLabel { get; set; }
+
+    /// <summary>Come chiamare questo peer nell'interfaccia: l'etichetta scelta qui, la persona se c'è, altrimenti la macchina.</summary>
+    public string Label => !string.IsNullOrWhiteSpace(CustomLabel) ? CustomLabel!
+                         : Work != null ? $"{Work.Label} · {Name}" : Name;
 
     public DateTime LastSeenUtc { get; set; } = DateTime.UtcNow;
 

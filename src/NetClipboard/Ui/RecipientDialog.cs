@@ -30,6 +30,15 @@ public sealed class RecipientDialog : ScaledForm
     private const int RowH = 56;
     private const int MaxRows = 5;
 
+    /// <summary>Diametro del pallino del conteggio (0,46 del lato del segno).</summary>
+    private const int ChipD = 21;
+
+    /// <summary>
+    /// Rientro dell'elenco: cade sul centro del segno dei file in intestazione,
+    /// cosi' l'elenco pende da li' invece di sfalsarsi.
+    /// </summary>
+    private const int ListIndent = Pad + BadgeSz / 2;
+
     /// <summary>Oltre questa lunghezza il nome di un file viene accorciato nel mezzo.</summary>
     private const int MaxNameChars = 26;
 
@@ -46,7 +55,8 @@ public sealed class RecipientDialog : ScaledForm
     private readonly Button _cancel = new() { DialogResult = DialogResult.Cancel };
 
     private Font _fTitle = null!, _fSub = null!, _fName = null!, _fDetail = null!,
-                 _fAvatar = null!, _fNote = null!, _fCount = null!;
+                 _fAvatar = null!, _fNote = null!, _fCount = null!,
+                 _fButton = null!, _fButtonStrong = null!;
 
     /// <summary>Destinatario scelto, valorizzato solo se la finestra esce con OK.</summary>
     public Peer? Chosen { get; private set; }
@@ -54,7 +64,7 @@ public sealed class RecipientDialog : ScaledForm
     public RecipientDialog(IReadOnlyList<Peer> peers, FileOffer offer, string sizeText)
     {
         _peers = peers;
-        _names = offer.TopLevelNames.Select(n => Shorten(n, MaxNameChars)).ToList();
+        _names = offer.TopLevelNames.ToList();
         _fileCount = offer.FileCount;
         _dirCount = offer.DirCount;
         _sizeText = sizeText;
@@ -143,21 +153,34 @@ public sealed class RecipientDialog : ScaledForm
         _fNote = PxFont("Segoe UI", 10f);
         _fCount = PxFont("Segoe UI Semibold", 10.5f);
 
+        // I pulsanti sono piu' alti dello standard di Windows: con il corpo
+        // standard (9 pt) il testo ci galleggia dentro. Un filo piu' grande, e
+        // semibold su quello che porta avanti l'azione.
+        _fButton = PxFont("Segoe UI", 13f);
+        _fButtonStrong = PxFont("Segoe UI Semibold", 13f);
+
+        _cancel.Font = _fButton;
+        _send.Font = _fButtonStrong;
         _note.Font = _fNote;
         _empty.Font = _fSub;
         _list.ItemHeight = P(RowH);
 
-        var full = ClientW - 2 * Pad;
         var y = HeaderH + 6;
+
+        // L'elenco sborda di 6 px logici oltre il rientro: le righe si disegnano
+        // con quello stesso scarto, cosi' il bordo della scheda cade sul rientro.
+        var listX = ListIndent - 6;
+        var listW = ClientW - Pad + 6 - listX;
+        var innerW = ClientW - Pad - ListIndent;
 
         var rows = Math.Clamp(_peers.Count, 1, MaxRows);
         var listH = P(RowH) * rows;
 
-        if (_peers.Count > 0) { _list.SetBounds(P(Pad - 6), P(y), P(full + 12), listH); _empty.Bounds = Rectangle.Empty; }
-        else { _empty.SetBounds(P(Pad), P(y), P(full), P(RowH)); _list.Bounds = Rectangle.Empty; }
+        if (_peers.Count > 0) { _list.SetBounds(P(listX), P(y), P(listW), listH); _empty.Bounds = Rectangle.Empty; }
+        else { _empty.SetBounds(P(ListIndent), P(y), P(innerW), P(RowH)); _list.Bounds = Rectangle.Empty; }
         y += (int)Math.Round(listH / ScaleFactor) + 12;
 
-        if (_peers.Count > 0) { _note.SetBounds(P(Pad), P(y), P(full), P(30)); y += 36; }
+        if (_peers.Count > 0) { _note.SetBounds(P(ListIndent), P(y), P(innerW), P(30)); y += 36; }
         else { _note.Bounds = Rectangle.Empty; y += 8; }   // nessuna posizione residua
 
         _cancel.SetBounds(P(ClientW - Pad - 104), P(y), P(104), P(34));
@@ -187,7 +210,7 @@ public sealed class RecipientDialog : ScaledForm
         TextRenderer.DrawText(g, L.T("recipient.heading"), _fTitle,
             new Rectangle(textLeft, P(19), textW, P(24)), Theme.TextMain,
             TextFormatFlags.Left | TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(g, Summary(), _fSub,
+        TextRenderer.DrawText(g, FittingSummary(g, textW), _fSub,
             new Rectangle(textLeft, P(45), textW, P(20)), Theme.TextMuted,
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
     }
@@ -196,15 +219,37 @@ public sealed class RecipientDialog : ScaledForm
     /// Cosa si sta mandando, detto con i nomi veri: "Pippo.pdf, pluto.txt e altri
     /// 15 file (2 MB)". Un conteggio nudo non dice se hai preso i file giusti.
     /// </summary>
-    private string Summary() => _names.Count switch
+    private string Summary(int nameBudget)
     {
-        0 => L.T("recipient.subtitle", _fileCount, _sizeText),   // nessun nome leggibile: si ripiega sul conteggio
-        1 => L.T("recipient.summaryOne", _names[0], _sizeText),
-        2 => L.T("recipient.summaryTwo", _names[0], _names[1], _sizeText),
-        3 => L.T("recipient.summaryThree", _names[0], _names[1], _names[2], _sizeText),
-        _ => L.T(_dirCount > 0 ? "recipient.summaryManyItems" : "recipient.summaryManyFiles",
-                 _names[0], _names[1], _names.Count - 2, _sizeText),
-    };
+        var n = _names.Select(x => Shorten(x, nameBudget)).ToList();
+        return n.Count switch
+        {
+            0 => L.T("recipient.subtitle", _fileCount, _sizeText),   // nessun nome leggibile: si ripiega sul conteggio
+            1 => L.T("recipient.summaryOne", n[0], _sizeText),
+            2 => L.T("recipient.summaryTwo", n[0], n[1], _sizeText),
+            3 => L.T("recipient.summaryThree", n[0], n[1], n[2], _sizeText),
+            _ => L.T(_dirCount > 0 ? "recipient.summaryManyItems" : "recipient.summaryManyFiles",
+                     n[0], n[1], n.Count - 2, _sizeText),
+        };
+    }
+
+    /// <summary>
+    /// La versione piu' lunga che entra nella riga. I nomi si accorciano finche'
+    /// serve, e se non basta si ripiega sul conteggio: la dimensione in fondo non
+    /// deve mai finire tagliata, perche' e' l'unica cosa che dice quanto pesa.
+    /// </summary>
+    private string FittingSummary(Graphics g, int width)
+    {
+        var budget = MaxNameChars;
+        var text = Summary(budget);
+        while (budget > 8 && Wider(g, text, width))
+            text = Summary(budget -= 3);
+        return Wider(g, text, width) ? L.T("recipient.subtitle", _fileCount, _sizeText) : text;
+    }
+
+    private bool Wider(Graphics g, string text, int width) =>
+        TextRenderer.MeasureText(g, text, _fSub, new Size(int.MaxValue, int.MaxValue),
+            TextFormatFlags.NoPadding).Width > width;
 
     /// <summary>
     /// Nome accorciato nel mezzo, conservando l'estensione: e' l'estensione a dire
@@ -276,7 +321,7 @@ public sealed class RecipientDialog : ScaledForm
         }
 
         // Pallino con il conteggio, appoggiato in basso a destra sulla pila.
-        var d = w * 0.46f;
+        var d = w * ((float)ChipD / BadgeSz);
         var dot = new RectangleF(box.Right - d, box.Bottom - d, d, d);
         using (var ring = new SolidBrush(Theme.HeaderBg))
             g.FillEllipse(ring, RectangleF.Inflate(dot, w * 0.03f, w * 0.03f));
@@ -373,6 +418,7 @@ public sealed class RecipientDialog : ScaledForm
     {
         _fTitle?.Dispose(); _fSub?.Dispose(); _fName?.Dispose(); _fDetail?.Dispose();
         _fAvatar?.Dispose(); _fNote?.Dispose(); _fCount?.Dispose();
+        _fButton?.Dispose(); _fButtonStrong?.Dispose();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

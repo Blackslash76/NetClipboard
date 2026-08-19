@@ -1,6 +1,7 @@
 using System.Drawing.Imaging;
 using System.Net;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using NetClipboard;
 using NetClipboard.Core;
 using NetClipboard.Core.Security;
@@ -12,9 +13,11 @@ namespace NetClipboard.Tools.UiShot;
 /// <summary>
 /// Fotografa le finestre dell'app, in tema chiaro e scuro, su file PNG.
 ///
-/// Serve a vedere davvero il risultato: DrawToBitmap non rende i controlli
-/// disegnati da noi (UserPaint non risponde a WM_PRINTCLIENT), quindi la finestra
-/// va mostrata sul serio e ripresa dallo schermo.
+/// Le finestre non compaiono mai davanti a chi sta lavorando: si aprono fuori
+/// dallo schermo e senza prendere il fuoco, e l'immagine si prende con PrintWindow
+/// (PW_RENDERFULLCONTENT), che legge la superficie composta da DWM. DrawToBitmap
+/// non andrebbe bene: i controlli disegnati da noi sono UserPaint e non rispondono
+/// a WM_PRINTCLIENT, quindi verrebbero vuoti.
 ///
 /// Nessun dato vero: cronologia, dispositivi e impostazioni sono inventati qui,
 /// cosi' le immagini si possono mostrare in giro senza pensarci.
@@ -232,34 +235,64 @@ internal static class Program
     private static void Invoke(object target, string name) =>
         target.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(target, null);
 
-    /// <summary>Mostra la finestra, lascia che si disegni e la riprende dallo schermo.</summary>
+    private const int SW_SHOWNOACTIVATE = 4;
+    private const int PW_RENDERFULLCONTENT = 2;
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, int nFlags);
+
+    /// <summary>
+    /// Apre la finestra fuori dallo schermo, senza attivarla, la lascia disegnare e
+    /// la fotografa. Chi sta usando il PC non vede niente e non perde il fuoco.
+    /// </summary>
     private static void Capture(Form form, string path, Action<Form>? prepare)
     {
-        if (!form.Visible)
-        {
-            form.StartPosition = FormStartPosition.Manual;
-            form.Location = new Point(120, 120);
-            form.Show();
-        }
+        form.TopMost = false;          // niente finestre appiccicate davanti a tutto
+        form.ShowInTaskbar = false;
+        form.StartPosition = FormStartPosition.Manual;
 
-        // Un paio di giri di messaggi non bastano: il primo disegno arriva dopo
-        // il ridimensionamento per il DPI.
-        Pump(500);
+        // Trasparente invece che fuori schermo: DWM smette di comporre una finestra
+        // che sta tutta fuori dai monitor, e PrintWindow restituisce una superficie
+        // vuota (visto: il secondo giro di scatti veniva bianco). Con opacita' zero
+        // la finestra viene composta lo stesso, ma non si vede.
+        if (form.Visible) form.Hide();
+        form.Opacity = 0;
+        form.Location = Hidden;
+        _ = form.Handle;               // crea l'handle: da qui in poi si scala e si dispone
+        ShowWindow(form.Handle, SW_SHOWNOACTIVATE);
+        form.Location = Hidden;        // il layout puo' aver ricentrato la finestra
+
+        // Un paio di giri di messaggi non bastano: il primo disegno arriva dopo il
+        // ridimensionamento per il DPI.
+        Pump(400);
         prepare?.Invoke(form);
+        form.Location = Hidden;
         form.Invalidate(true);
-        Pump(500);
+        Pump(400);
 
-        var b = form.Bounds;
-        using (var bmp = new Bitmap(b.Width, b.Height))
+        using (var bmp = new Bitmap(form.Width, form.Height))
         {
             using (var g = Graphics.FromImage(bmp))
-                g.CopyFromScreen(b.Location, Point.Empty, b.Size);
+            {
+                var hdc = g.GetHdc();
+                try { PrintWindow(form.Handle, hdc, PW_RENDERFULLCONTENT); }
+                finally { g.ReleaseHdc(hdc); }
+            }
             bmp.Save(path, ImageFormat.Png);
         }
 
         form.Dispose();
-        Pump(100);
+        Pump(50);
     }
+
+    /// <summary>
+    /// Angolo dello schermo primario: la finestra e' li' ma con opacita' zero, quindi
+    /// invisibile. Deve restare dentro un monitor, altrimenti DWM non la compone.
+    /// </summary>
+    private static Point Hidden => new(0, 0);
 
     private static void Pump(int ms)
     {

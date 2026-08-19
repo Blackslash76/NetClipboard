@@ -44,6 +44,10 @@ public sealed class DevicesForm : ScaledForm
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 2000 };
     private bool _busy;
 
+    /// <summary>Menu del tasto destro sulle righe, e riga su cui e' stato aperto.</summary>
+    private readonly ContextMenuStrip _rowMenu = new();
+    private ListView? _menuList;
+
     public DevicesForm(DeviceIdentity identity, TrustStore trust, ClipboardTransport transport)
     {
         _identity = identity;
@@ -58,6 +62,7 @@ public sealed class DevicesForm : ScaledForm
 
         _trusted = MakeList();
         _discovered = MakeList();
+        BuildRowMenu();
         ApplyTexts();
 
         _revoke.Click += (_, _) => RevokeSelected();
@@ -129,13 +134,15 @@ public sealed class DevicesForm : ScaledForm
         _titleSelf.SetBounds(P(Pad), P(y), P(full), P(22)); y += 26;
         _self.SetBounds(P(Pad), P(y), P(full), P(20)); y += 30;
 
+        // Due righe: la spiegazione ora dice anche come si ribattezza un dispositivo,
+        // e su una riga sola verrebbe tagliata.
         _titleTrusted.SetBounds(P(Pad), P(y), P(300), P(22)); y += 24;
-        _hintTrusted.SetBounds(P(Pad), P(y), P(full), P(18)); y += 22;
+        _hintTrusted.SetBounds(P(Pad), P(y), P(full), P(34)); y += 38;
         _trusted.SetBounds(P(Pad), P(y), P(full), P(ListH)); y += ListH + 8;
         _revoke.SetBounds(P(Pad), P(y), P(210), P(BtnH)); y += BtnH + 14;
 
         _titleDiscovered.SetBounds(P(Pad), P(y), P(300), P(22)); y += 24;
-        _hintDiscovered.SetBounds(P(Pad), P(y), P(full), P(18)); y += 22;
+        _hintDiscovered.SetBounds(P(Pad), P(y), P(full), P(34)); y += 38;
         _discovered.SetBounds(P(Pad), P(y), P(full), P(ListH)); y += ListH + 8;
         _pair.SetBounds(P(Pad), P(y), P(210), P(BtnH));
         _scan.SetBounds(P(Pad + 220), P(y), P(130), P(BtnH)); y += BtnH + 16;
@@ -149,31 +156,91 @@ public sealed class DevicesForm : ScaledForm
 
         // le colonne non si scalano da sole
         foreach (var lv in new[] { _trusted, _discovered })
-        {
-            lv.Columns[0].Width = P(230);
-            lv.Columns[1].Width = P(full - 230 - 24);
-        }
+            FitColumns(lv, P(230));
     }
 
-    private static ListView MakeList()
+    private ListView MakeList()
     {
         var lv = new ListView
         {
             View = View.Details, FullRowSelect = true, MultiSelect = false, HideSelection = false,
+            LabelEdit = true,   // il nome si cambia sul posto, senza aprire altre finestre
+            ContextMenuStrip = _rowMenu,
         };
         lv.Columns.Add(string.Empty); // le intestazioni le mette ApplyTexts()
         lv.Columns.Add(string.Empty);
+
+        // Mentre si scrive, l'aggiornamento periodico riscriverebbe la riga sotto
+        // le dita: si ferma per la durata della modifica.
+        lv.BeforeLabelEdit += (_, _) => _refresh.Stop();
+        lv.AfterLabelEdit += (_, e) => FinishRename(lv, e);
+        lv.DoubleClick += (_, _) => BeginRename(lv);
+        lv.MouseDown += (_, e) => { if (e.Button == MouseButtons.Right) _menuList = lv; };
         return lv;
     }
+
+    private void BuildRowMenu()
+    {
+        _rowMenu.Items.Add(L.T("devices.rename"), null, (_, _) => { if (_menuList != null) BeginRename(_menuList); });
+        _rowMenu.Items.Add(L.T("devices.resetName"), null, (_, _) => ResetName());
+        _rowMenu.Renderer = Theme.CreateMenuRenderer();
+        _rowMenu.Opening += (_, e) =>
+        {
+            if (_menuList == null || _menuList.SelectedItems.Count == 0) e.Cancel = true;
+            else { _rowMenu.BackColor = Theme.Card; _rowMenu.ForeColor = Theme.TextMain; }
+        };
+    }
+
+    private static void BeginRename(ListView lv)
+    {
+        if (lv.SelectedItems.Count > 0) lv.SelectedItems[0].BeginEdit();
+    }
+
+    /// <summary>
+    /// Fine della modifica: si salva l'etichetta e si lascia che sia RefreshLists a
+    /// riscrivere la riga dalla sorgente (cosi' una stringa vuota torna al nome vero).
+    /// </summary>
+    private void FinishRename(ListView lv, LabelEditEventArgs e)
+    {
+        _refresh.Start();
+        if (e.Label == null) return;   // modifica annullata
+        e.CancelEdit = true;
+        _transport.SetCustomLabel(KeyOf(lv.Items[e.Item]), e.Label);
+        RefreshLists();
+    }
+
+    private void ResetName()
+    {
+        if (_menuList == null || _menuList.SelectedItems.Count == 0) return;
+        _transport.SetCustomLabel(KeyOf(_menuList.SelectedItems[0]), null);
+        RefreshLists();
+    }
+
+    /// <summary>
+    /// La seconda colonna arriva fino al bordo: se le colonne non coprono tutta la
+    /// larghezza, la lista disegna comunque l'intestazione sullo spazio avanzato e
+    /// sembra esserci una terza colonna vuota. ClientSize esclude gia' il bordo e
+    /// la barra di scorrimento quando c'e', percio' va ricalcolata a ogni cambio
+    /// di elenco e non solo al cambio di DPI.
+    /// </summary>
+    private static void FitColumns(ListView lv, int firstWidth)
+    {
+        lv.Columns[0].Width = firstWidth;
+        lv.Columns[1].Width = Math.Max(P96Min, lv.ClientSize.Width - firstWidth);
+    }
+
+    /// <summary>Larghezza minima della colonna, perche' non sparisca del tutto.</summary>
+    private const int P96Min = 60;
 
     private void RefreshLists()
     {
         UpdateList(_trusted, _trust.All
-            .Select(d => (Key: d.DeviceId, C1: d.Name, C2: DeviceIdentity.ShortFingerprint(d.DeviceId), Tag: (object)d.DeviceId))
+            .Select(d => (Key: d.DeviceId, C1: _transport.LabelFor(d.DeviceId, d.Name),
+                          C2: DeviceIdentity.ShortFingerprint(d.DeviceId), Tag: (object)d.DeviceId))
             .ToList());
 
         UpdateList(_discovered, _transport.Peers.Where(p => !p.Trusted)
-            .Select(p => (Key: p.DeviceId, C1: p.Name, C2: p.Address.ToString(), Tag: (object)p))
+            .Select(p => (Key: p.DeviceId, C1: p.Label, C2: p.Address.ToString(), Tag: (object)p))
             .ToList());
     }
 
@@ -209,6 +276,9 @@ public sealed class DevicesForm : ScaledForm
         if (selKey != null)
             foreach (ListViewItem lvi in lv.Items)
                 if (KeyOf(lvi) == selKey) { lvi.Selected = true; lvi.Focused = true; break; }
+
+        // Comparsa o sparizione della barra di scorrimento: la colonna si riadatta.
+        FitColumns(lv, lv.Columns[0].Width);
     }
 
     private static string KeyOf(ListViewItem i) => i.Tag is Peer p ? p.DeviceId : (string)i.Tag!;
@@ -294,6 +364,7 @@ public sealed class DevicesForm : ScaledForm
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _rowMenu.Dispose();
         _refresh.Dispose();
         base.OnFormClosed(e);
     }

@@ -11,7 +11,20 @@ namespace NetClipboard;
 /// </summary>
 public sealed class AppConfig
 {
+    /// <summary>
+    /// Come questo PC si presenta agli altri. NON e' piu' modificabile: e' il nome
+    /// della macchina e basta. Rinominarsi confondeva chi riceve, che vedeva un
+    /// nome che non corrisponde a nessun computer della rete; per chiamare gli
+    /// altri come si vuole c'e' <see cref="DeviceLabels"/>, che resta locale.
+    /// </summary>
     public string DisplayName { get; set; } = Environment.MachineName;
+
+    /// <summary>
+    /// Etichette scelte da noi per gli altri dispositivi (DeviceId -> nome).
+    /// Vale solo su questo PC: nessuno la vede e nessuno la puo' cambiare da fuori,
+    /// e proprio per questo e' l'unico nome di cui ci si puo' fidare in elenco.
+    /// </summary>
+    public Dictionary<string, string> DeviceLabels { get; set; } = new();
     public int Port { get; set; } = 45654;
 
     public bool ShareText { get; set; } = true;
@@ -111,7 +124,12 @@ public sealed class AppConfig
                 var json = File.ReadAllText(ConfigPath);
                 var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts);
                 if (cfg != null)
+                {
+                    // Il nome proprio non si sceglie piu': se in un config vecchio
+                    // c'era un nome inventato, torna quello della macchina.
+                    cfg.DisplayName = Environment.MachineName;
                     return cfg;
+                }
             }
         }
         catch
