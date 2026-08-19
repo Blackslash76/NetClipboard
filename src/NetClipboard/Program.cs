@@ -18,6 +18,13 @@ internal static class Program
         if (args.Length > 0 && string.Equals(args[0], "--install-firewall", StringComparison.OrdinalIgnoreCase))
             return FirewallHelper.InstallRulesNow();
 
+        // Modalita' speciale: prende il posto dell'eseguibile installato (rilanciata
+        // elevata via UAC quando l'app sta in Program Files e non puo' sostituirsi da
+        // sola). Qui gira il binario NUOVO, gia' verificato contro lo SHA-256 firmato.
+        //   --apply-update <exe da sostituire> <pid da attendere>
+        if (args.Length > 2 && string.Equals(args[0], Updater.ApplyArgument, StringComparison.OrdinalIgnoreCase))
+            return Updater.RunApplyHelper(args[1], int.TryParse(args[2], out var pid) ? pid : 0);
+
         // Strumenti sviluppatore per il rilascio (nessuna UI):
         //   --gen-release-key <privateOut> <publicOut>
         //   --sign-release <exe> <version> <privateKeyFile> <exeUrl> <manifestOut> [note]
@@ -50,6 +57,20 @@ internal static class Program
                 File.WriteAllText("sign-error.txt", ex.ToString());
                 return 1;
             }
+        }
+
+        // Modalita' senza interfaccia: registra l'avvio automatico per QUESTO utente
+        // e esce. La usa l'installer: gira elevato, e da li' non saprebbe scrivere nel
+        // profilo giusto — con "runasoriginaluser" invece questo processo e' proprio
+        // dell'utente vero. Cosi' l'avvio automatico resta un fatto solo suo, con un
+        // unico padrone (HKCU\...\Run) invece di un collegamento che dice un'altra cosa.
+        if (args.Length > 0 && string.Equals(args[0], "--set-autostart", StringComparison.OrdinalIgnoreCase))
+        {
+            var cfg = AppConfig.Load();
+            cfg.StartWithWindows = true;
+            cfg.Save();
+            SettingsForm.ApplyAutoStart(true);
+            return 0;
         }
 
         // Avviato dal menu "Invia a" di Windows: Explorer passa i percorsi

@@ -809,14 +809,21 @@ public sealed class TrayContext : ApplicationContext
     {
         if (_pendingUpdatePath == null || !File.Exists(_pendingUpdatePath))
         { Balloon(L.T("update.title"), L.T("update.nonePending"), ToolTipIcon.Warning); return; }
-        if (Updater.ApplyAndRestart(_pendingUpdatePath))
+        switch (Updater.ApplyAndRestart(_pendingUpdatePath))
         {
-            _tray.Visible = false;
-            _updateTimer?.Dispose();
-            _discovery.Dispose(); _transport.Dispose(); _tray.Dispose();
-            ExitThread();
+            case UpdateApply.Started:
+                _tray.Visible = false;
+                _updateTimer?.Dispose();
+                _discovery.Dispose(); _transport.Dispose(); _tray.Dispose();
+                ExitThread();
+                break;
+            case UpdateApply.Declined:
+                Balloon(L.T("update.title"), L.T("update.elevationDeclined"), ToolTipIcon.Warning);
+                break;
+            default:
+                Balloon(L.T("update.title"), L.T("update.installFailed"), ToolTipIcon.Warning);
+                break;
         }
-        else Balloon(L.T("update.title"), L.T("update.installFailed"), ToolTipIcon.Warning);
     }
 
     private void OpenLog()

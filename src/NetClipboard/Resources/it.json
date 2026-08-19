@@ -81,6 +81,7 @@
   "update.installNowBody": "È disponibile la versione {0}, già scaricata e verificata.\n\nInstallarla e riavviare adesso?",
   "update.nonePending": "Nessun aggiornamento pronto.",
   "update.installFailed": "Installazione fallita (vedi log).",
+  "update.elevationDeclined": "Aggiornamento annullato: NetClipboard è installato in Programmi, e sostituirlo richiede i diritti di amministratore.",
 
   "settings.title": "NetClipboard · Impostazioni",
   "settings.titleVersion": "NetClipboard · Impostazioni · v{0}",

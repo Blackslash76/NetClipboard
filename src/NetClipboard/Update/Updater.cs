@@ -1,4 +1,6 @@
+using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
@@ -10,6 +12,14 @@ using NetClipboard.Core;
 namespace NetClipboard.Update;
 
 public sealed record UpdateInfo(Version Version, string ExeUrl, string Sha256, string Note);
+
+/// <summary>
+/// Esito del tentativo di sostituire l'eseguibile. <see cref="Declined"/> esiste
+/// per non dire "installazione fallita" a chi ha semplicemente risposto no alla
+/// richiesta di amministratore: non e' un guasto, ed e' un caso che da Program
+/// Files si ripresenta a ogni aggiornamento.
+/// </summary>
+public enum UpdateApply { Started, Declined, Failed }
 
 /// <summary>
 /// Auto-update da GitHub Releases con firma crittografica.
@@ -114,12 +124,45 @@ public static class Updater
         }
     }
 
-    /// <summary>Sostituisce l'eseguibile in uso e riavvia. Il chiamante deve poi uscire.</summary>
-    public static bool ApplyAndRestart(string newExe)
+    /// <summary>
+    /// Argomento della modalita' che sostituisce l'eseguibile con i diritti di
+    /// amministratore: <c>--apply-update &lt;exe da sostituire&gt; &lt;pid da attendere&gt;</c>.
+    /// </summary>
+    public const string ApplyArgument = "--apply-update";
+
+    /// <summary>Quanto si aspetta che il processo da aggiornare lasci l'eseguibile.</summary>
+    private static readonly TimeSpan ParentExitWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Sostituisce l'eseguibile in uso e riavvia. Il chiamante deve poi uscire.
+    ///
+    /// Da <c>C:\Program Files</c> un processo non elevato non puo' toccare il
+    /// proprio eseguibile: in quel caso non si fallisce, si chiede l'elevazione e
+    /// si lascia fare allo stesso binario appena scaricato (vedi <see cref="RunApplyHelper"/>).
+    /// </summary>
+    public static UpdateApply ApplyAndRestart(string newExe)
+    {
+        var current = Environment.ProcessPath!;
+        return CanWriteBeside(current) ? SwapInPlace(current, newExe) : SwapElevated(current, newExe);
+    }
+
+    /// <summary>Si prova a scrivere davvero: i permessi effettivi non si deducono dal percorso.</summary>
+    private static bool CanWriteBeside(string exePath)
     {
         try
         {
-            var current = Environment.ProcessPath!;
+            var probe = Path.Combine(Path.GetDirectoryName(exePath)!, $".netclip-{Guid.NewGuid():N}.tmp");
+            File.WriteAllBytes(probe, Array.Empty<byte>());
+            File.Delete(probe);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static UpdateApply SwapInPlace(string current, string newExe)
+    {
+        try
+        {
             var old = current + ".old";
             try { if (File.Exists(old)) File.Delete(old); } catch { }
             File.Move(current, old);          // rinominare un exe in uso è consentito
@@ -127,12 +170,120 @@ public static class Updater
             try { Directory.Delete(Path.GetDirectoryName(newExe)!); } catch { }
             Process.Start(new ProcessStartInfo(current) { UseShellExecute = true });
             Log.Write("[Update] applicato, riavvio in corso");
-            return true;
+            return UpdateApply.Started;
         }
         catch (Exception ex)
         {
             Log.Write($"[Update] applicazione fallita: {ex.Message}");
-            return false;
+            return UpdateApply.Failed;
+        }
+    }
+
+    /// <summary>
+    /// Rilancia elevato l'eseguibile <b>appena scaricato</b> perche' faccia lui lo
+    /// scambio. E' gia' stato verificato contro lo SHA-256 firmato, quindi non si
+    /// sta dando l'amministratore a qualcosa di arrivato senza controlli.
+    /// </summary>
+    private static UpdateApply SwapElevated(string current, string newExe)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(newExe)
+            {
+                UseShellExecute = true,   // obbligatorio per "runas"
+                Verb = "runas",
+            };
+            psi.ArgumentList.Add(ApplyArgument);
+            psi.ArgumentList.Add(current);
+            psi.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            Process.Start(psi);
+            Log.Write("[Update] cartella non scrivibile: scambio delegato a un processo elevato");
+            return UpdateApply.Started;   // il chiamante esce: da qui in poi tocca all'helper
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            Log.Write("[Update] elevazione rifiutata dall'utente");
+            return UpdateApply.Declined;
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"[Update] elevazione fallita: {ex.Message}");
+            return UpdateApply.Failed;
+        }
+    }
+
+    /// <summary>
+    /// Modalita' helper, eseguita elevata dal binario nuovo: aspetta che il vecchio
+    /// processo esca, prende il suo posto e lo riavvia <b>senza</b> privilegi.
+    ///
+    /// Il riavvio passa da Explorer proprio per questo: un processo lanciato da uno
+    /// elevato eredita i suoi privilegi, e NetClipboard non deve girare da
+    /// amministratore — legge la clipboard e sta in ascolto sulla rete, sarebbe un
+    /// regalo a chiunque trovasse un modo di parlargli.
+    /// </summary>
+    public static int RunApplyHelper(string target, int parentPid)
+    {
+        try
+        {
+            WaitForExit(parentPid);
+
+            var self = Environment.ProcessPath!;
+            var old = target + ".old";
+            try { if (File.Exists(old)) File.Delete(old); } catch { }
+
+            var moved = false;
+            try
+            {
+                if (File.Exists(target)) { File.Move(target, old); moved = true; }
+                File.Copy(self, target, overwrite: true);   // non si puo' spostare: e' l'exe in esecuzione
+            }
+            catch (Exception ex)
+            {
+                // Meglio l'applicazione di prima che nessuna applicazione: se la
+                // copia non riesce, il vecchio eseguibile torna al suo posto.
+                Log.Write($"[Update] scambio elevato fallito: {ex.Message}");
+                if (moved && !File.Exists(target))
+                    try { File.Move(old, target); } catch { }
+                return 1;
+            }
+
+            RestartUnelevated(target);
+            Log.Write("[Update] applicato con elevazione, riavvio in corso");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"[Update] helper fallito: {ex.Message}");
+            return 1;
+        }
+    }
+
+    private static void WaitForExit(int pid)
+    {
+        try
+        {
+            using var parent = Process.GetProcessById(pid);
+            parent.WaitForExit((int)ParentExitWait.TotalMilliseconds);
+        }
+        catch (ArgumentException)
+        {
+            // gia' uscito fra la richiesta di elevazione e adesso: e' il caso normale
+        }
+    }
+
+    /// <summary>
+    /// Riavvia scaricando i privilegi. Explorer gira a integrita' media: cio' che
+    /// avvia parte come l'utente, non come l'amministratore che siamo adesso.
+    /// </summary>
+    private static void RestartUnelevated(string target)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{target}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Write($"[Update] riavvio non riuscito, si aprira' al prossimo accesso: {ex.Message}");
         }
     }
 
@@ -143,6 +294,16 @@ public static class Updater
         {
             var old = Environment.ProcessPath + ".old";
             if (File.Exists(old)) File.Delete(old);
+        }
+        catch { }
+
+        // Lo scambio elevato COPIA il nuovo eseguibile invece di spostarlo — non
+        // puo' spostare se stesso mentre gira — quindi la cartella di scarico resta
+        // li' con dentro un eseguibile intero. La toglie chi riparte.
+        try
+        {
+            foreach (var dir in Directory.GetDirectories(Path.GetTempPath(), "netclip-update-*"))
+                try { Directory.Delete(dir, recursive: true); } catch { }
         }
         catch { }
     }

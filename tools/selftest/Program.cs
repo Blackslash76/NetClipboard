@@ -168,41 +168,54 @@ Console.WriteLine("== identita' del chiamante sulla pipe ==");
 // lo stesso meccanismo: il client concede l'impersonation, il servente legge
 // il SID e lo confronta con il proprio.
 {
-    var name = "netclip-test-" + Guid.NewGuid().ToString("N");
-    var verified = false; var refused = false;
-
-    var server = Task.Run(() =>
+    // Un giro per volta, con una stretta di mano in mezzo. Prima la prova
+    // dipendeva da chi arrivava primo: se il client si connetteva e si
+    // disconnetteva mentre il servente non era ancora in ascolto,
+    // WaitForConnection sollevava, il task moriva e il giro dopo bussava a
+    // nessuno. Sul PC di chi sviluppa non si vedeva; sotto carico — cioe' in CI —
+    // cadeva a caso, ed e' il modo migliore per far ignorare una build rossa.
+    //
+    // Ora: il servente dichiara di essere in ascolto (listening), e il client
+    // resta connesso finche' il servente non ha finito di guardarlo.
+    bool Identified(System.Security.Principal.TokenImpersonationLevel level)
     {
-        using var srv = new System.IO.Pipes.NamedPipeServerStream(
-            name, System.IO.Pipes.PipeDirection.In, 2);
-        for (var round = 0; round < 2; round++)
+        var name = "netclip-test-" + Guid.NewGuid().ToString("N");
+        var listening = new ManualResetEventSlim(false);
+        var identified = false;
+
+        var server = Task.Run(() =>
         {
+            using var srv = new System.IO.Pipes.NamedPipeServerStream(
+                name, System.IO.Pipes.PipeDirection.In, 1);
+            listening.Set();
             srv.WaitForConnection();
-            System.Security.Principal.SecurityIdentifier? sid = null;
             try
             {
+                System.Security.Principal.SecurityIdentifier? sid = null;
                 srv.RunAsClient(() => sid = System.Security.Principal.WindowsIdentity.GetCurrent().User);
                 using var me = System.Security.Principal.WindowsIdentity.GetCurrent();
-                if (sid != null && me.User != null && sid.Equals(me.User)) verified = true;
+                identified = sid != null && me.User != null && sid.Equals(me.User);
             }
-            catch { refused = true; }
-            srv.Disconnect();
+            catch
+            {
+                identified = false; // il client non ha concesso l'identita': e' il caso che ci interessa
+            }
+        });
+
+        listening.Wait(TimeSpan.FromSeconds(15));
+        using (var client = new System.IO.Pipes.NamedPipeClientStream(".", name,
+                   System.IO.Pipes.PipeDirection.Out, System.IO.Pipes.PipeOptions.None, level))
+        {
+            client.Connect(15000);
+            server.Wait(TimeSpan.FromSeconds(20)); // dentro il using: il servente lo trova ancora attaccato
         }
-    });
+        return identified;
+    }
 
-    using (var c1 = new System.IO.Pipes.NamedPipeClientStream(".", name,
-               System.IO.Pipes.PipeDirection.Out, System.IO.Pipes.PipeOptions.None,
-               System.Security.Principal.TokenImpersonationLevel.Impersonation))
-        c1.Connect(3000);
-
-    using (var c2 = new System.IO.Pipes.NamedPipeClientStream(".", name,
-               System.IO.Pipes.PipeDirection.Out, System.IO.Pipes.PipeOptions.None,
-               System.Security.Principal.TokenImpersonationLevel.None))
-        c2.Connect(3000);
-
-    server.Wait(TimeSpan.FromSeconds(5));
-    Check("client che concede l'identita': riconosciuto", verified);
-    Check("client che non la concede: rifiutato", refused);
+    Check("client che concede l'identita': riconosciuto",
+        Identified(System.Security.Principal.TokenImpersonationLevel.Impersonation));
+    Check("client che non la concede: rifiutato",
+        !Identified(System.Security.Principal.TokenImpersonationLevel.None));
 }
 
 Console.WriteLine();
