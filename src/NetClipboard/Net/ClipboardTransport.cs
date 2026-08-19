@@ -63,6 +63,23 @@ public sealed class ClipboardTransport : IDisposable
 
     private static readonly TimeSpan PeerTtl = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// Tetto dei frame durante l'handshake, quando ancora non sappiamo chi c'e'
+    /// dall'altra parte. Li' passano chiavi e firme, mai piu' di un KB: lasciare
+    /// il tetto dei dati (decine di MB) significava far allocare a chiunque sulla
+    /// rete decine di MB per connessione, prima di qualunque autenticazione.
+    /// </summary>
+    private const int MaxHandshakeFrame = 64 * 1024;
+
+    /// <summary>
+    /// Connessioni servite insieme. Il traffico vero e' fatto di ping brevi: oltre
+    /// questo numero non c'e' un uso legittimo, c'e' qualcuno che sta occupando
+    /// memoria. Meglio rifiutare la connessione che restare senza.
+    /// </summary>
+    private const int MaxConcurrentSessions = 32;
+
+    private readonly SemaphoreSlim _serving = new(MaxConcurrentSessions, MaxConcurrentSessions);
+
     private readonly AppConfig _config;
     private readonly DeviceIdentity _identity;
     private readonly TrustStore _trust;
@@ -193,7 +210,18 @@ public sealed class ClipboardTransport : IDisposable
             catch (OperationCanceledException) { break; }
             catch (ObjectDisposedException) { break; }
             catch { continue; }
-            _ = Task.Run(() => ServeAsync(client, ct));
+
+            if (!_serving.Wait(0))
+            {
+                Log.Write("[Transport] connessione rifiutata: troppe sessioni insieme");
+                try { client.Dispose(); } catch { }
+                continue;
+            }
+            _ = Task.Run(async () =>
+            {
+                try { await ServeAsync(client, ct); }
+                finally { _serving.Release(); }
+            });
         }
     }
 
@@ -897,7 +925,7 @@ public sealed class ClipboardTransport : IDisposable
             { w.Write(Magic); w.Write(Version); WBuf(w, hs.IdPublicKey); WBuf(w, hs.EphPublicKey); }
             await WritePlainAsync(stream, ms.ToArray(), ct);
 
-            var h2 = await ReadPlainAsync(stream, ct);
+            var h2 = await ReadPlainAsync(stream, ct, MaxHandshakeFrame);
             if (h2 == null) return null;
             using var r = new BinaryReader(new MemoryStream(h2));
             var idS = RBuf(r); var ephS = RBuf(r); var sigS = RBuf(r);
@@ -918,7 +946,7 @@ public sealed class ClipboardTransport : IDisposable
         var hs = new Handshaker(_identity);
         try
         {
-            var h1 = await ReadPlainAsync(stream, ct);
+            var h1 = await ReadPlainAsync(stream, ct, MaxHandshakeFrame);
             if (h1 == null) return null;
             using var r = new BinaryReader(new MemoryStream(h1));
             var magic = r.ReadBytes(2);
@@ -932,7 +960,7 @@ public sealed class ClipboardTransport : IDisposable
             { WBuf(w, hs.IdPublicKey); WBuf(w, hs.EphPublicKey); WBuf(w, sigS); }
             await WritePlainAsync(stream, ms.ToArray(), ct);
 
-            var h3 = await ReadPlainAsync(stream, ct);
+            var h3 = await ReadPlainAsync(stream, ct, MaxHandshakeFrame);
             if (h3 == null) return null;
             using var r3 = new BinaryReader(new MemoryStream(h3));
             var sigC = RBuf(r3);
@@ -963,12 +991,17 @@ public sealed class ClipboardTransport : IDisposable
         await stream.FlushAsync(ct);
     }
 
-    private async Task<byte[]?> ReadPlainAsync(NetworkStream stream, CancellationToken ct)
+    /// <summary>
+    /// Un frame dal filo. <paramref name="maxBytes"/> serve a tenere basso il tetto
+    /// finche' non sappiamo chi parla: di norma e' il limite dei trasferimenti,
+    /// durante l'handshake sono 64 KB.
+    /// </summary>
+    private async Task<byte[]?> ReadPlainAsync(NetworkStream stream, CancellationToken ct, long maxBytes = 0)
     {
         var len = await ReadExactAsync(stream, 4, ct);
         if (len == null) return null;
         var n = (len[0] << 24) | (len[1] << 16) | (len[2] << 8) | len[3];
-        var max = _config.MaxTransferMb * 1024L * 1024L + (4 << 20);
+        var max = maxBytes > 0 ? maxBytes : _config.MaxTransferMb * 1024L * 1024L + (4 << 20);
         if (n <= 0 || n > max) return null;
         return await ReadExactAsync(stream, n, ct);
     }
@@ -1004,5 +1037,9 @@ public sealed class ClipboardTransport : IDisposable
     private static void WStr(BinaryWriter w, string s) => WBuf(w, Encoding.UTF8.GetBytes(s));
     private static string RStr(BinaryReader r) => Encoding.UTF8.GetString(RBuf(r));
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        Stop();
+        _serving.Dispose();
+    }
 }

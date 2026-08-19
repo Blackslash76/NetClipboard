@@ -30,7 +30,11 @@ public static class InstanceBridge
     {
         try
         {
-            using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
+            // Impersonation: e' cio' che permette a chi ascolta di verificare CHI sta
+            // scrivendo. Senza, il servente non puo' leggere l'identita' del chiamante
+            // e — giustamente — rifiuta la richiesta.
+            using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out,
+                PipeOptions.None, TokenImpersonationLevel.Impersonation);
             client.Connect(timeoutMs);
 
             using var w = new BinaryWriter(client, Encoding.UTF8, leaveOpen: true);
@@ -80,25 +84,29 @@ public static class InstanceBridge
     /// La pipe ha un nome noto a tutta la macchina: si accettano richieste solo
     /// dallo stesso utente, altrimenti un altro account potrebbe far comparire
     /// finestre sulla sessione altrui.
+    ///
+    /// Il confronto è fra SID e non fra nomi: il nome può arrivare senza dominio, e
+    /// due account omonimi su domini diversi sembrerebbero lo stesso. Se l'identità
+    /// non è verificabile la richiesta si rifiuta: un controllo che cede quando non
+    /// sa è un controllo che non c'è.
     /// </summary>
     private static bool SameUser(NamedPipeServerStream server)
     {
         try
         {
-            var client = server.GetImpersonationUserName();
-            var me = WindowsIdentity.GetCurrent().Name;
+            SecurityIdentifier? clientSid = null;
+            server.RunAsClient(() => clientSid = WindowsIdentity.GetCurrent().User);
 
-            // GetImpersonationUserName può restituire il solo nome utente, senza dominio.
-            var mine = me.Contains('\\') ? me[(me.IndexOf('\\') + 1)..] : me;
-            var theirs = client.Contains('\\') ? client[(client.IndexOf('\\') + 1)..] : client;
+            using var me = WindowsIdentity.GetCurrent();
+            if (clientSid != null && me.User != null && clientSid.Equals(me.User)) return true;
 
-            if (string.Equals(mine, theirs, StringComparison.OrdinalIgnoreCase)) return true;
-            Log.Write($"[SendTo] richiesta rifiutata: arriva da '{client}', non da '{me}'.");
+            Log.Write($"[SendTo] richiesta rifiutata: arriva da un altro utente ({clientSid?.Value ?? "identità ignota"}).");
             return false;
         }
-        catch
+        catch (Exception ex)
         {
-            return true; // se l'identità non è verificabile non si blocca l'uso normale
+            Log.Write($"[SendTo] richiesta rifiutata: identità del chiamante non verificabile ({ex.Message}).");
+            return false;
         }
     }
 

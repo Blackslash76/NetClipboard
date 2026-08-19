@@ -84,7 +84,12 @@ public static class Updater
     {
         try
         {
-            var tmp = Path.Combine(Path.GetTempPath(), $"NetClipboard.update.{info.Version}.exe");
+            // Cartella nuova e con nome casuale a ogni download, non un percorso
+            // prevedibile in %TEMP%: fra la verifica dello SHA-256 e la sostituzione
+            // dell'eseguibile c'e' una finestra, e un percorso che si puo' indovinare
+            // e' un invito a infilarcisi dentro.
+            var dir = Directory.CreateTempSubdirectory("netclip-update-");
+            var tmp = Path.Combine(dir.FullName, $"NetClipboard.{info.Version}.exe");
             using (var resp = await Http.GetAsync(info.ExeUrl, HttpCompletionOption.ResponseHeadersRead, ct))
             {
                 resp.EnsureSuccessStatusCode();
@@ -96,7 +101,7 @@ public static class Updater
             if (!string.Equals(actual, info.Sha256, StringComparison.OrdinalIgnoreCase))
             {
                 Log.Write("[Update] SHA-256 non combacia: scarto il download");
-                try { File.Delete(tmp); } catch { }
+                try { dir.Delete(recursive: true); } catch { }
                 return null;
             }
             Log.Write($"[Update] scaricato e verificato v{info.Version}");
@@ -119,6 +124,7 @@ public static class Updater
             try { if (File.Exists(old)) File.Delete(old); } catch { }
             File.Move(current, old);          // rinominare un exe in uso è consentito
             File.Move(newExe, current);       // il nuovo prende il posto
+            try { Directory.Delete(Path.GetDirectoryName(newExe)!); } catch { }
             Process.Start(new ProcessStartInfo(current) { UseShellExecute = true });
             Log.Write("[Update] applicato, riavvio in corso");
             return true;

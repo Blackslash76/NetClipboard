@@ -71,20 +71,33 @@ public sealed class ClipboardPayload
         switch (kind)
         {
             case PayloadKind.Text:
-            {
-                var len = r.ReadInt32();
-                return FromText(Encoding.UTF8.GetString(r.ReadBytes(len)));
-            }
+                return FromText(Encoding.UTF8.GetString(r.ReadBytes(ReadLength(r))));
             case PayloadKind.Image:
-            {
-                var len = r.ReadInt32();
-                return FromImage(r.ReadBytes(len));
-            }
+                return FromImage(r.ReadBytes(ReadLength(r)));
             case PayloadKind.Files:
                 return FromOffer(FileOffer.ReadFrom(r));
             default:
                 throw new InvalidDataException($"Tipo payload sconosciuto: {(byte)kind}");
         }
+    }
+
+    /// <summary>
+    /// Lunghezza dichiarata dal mittente, accettata solo se quei byte ci sono davvero.
+    ///
+    /// Serve perche' <see cref="BinaryReader.ReadBytes"/> alloca subito l'intero
+    /// buffer richiesto e NON solleva niente se il flusso finisce prima: senza
+    /// questo controllo un messaggio di nove byte che dichiarava 600 MB li faceva
+    /// allocare davvero, e per giunta senza errore. I dati arrivano dalla rete,
+    /// anche da chi non e' accoppiato: la lunghezza va sempre confrontata con lo
+    /// spazio reale.
+    /// </summary>
+    internal static int ReadLength(BinaryReader r)
+    {
+        var len = r.ReadInt32();
+        var left = r.BaseStream.Length - r.BaseStream.Position;
+        if (len < 0 || len > left)
+            throw new InvalidDataException($"lunghezza dichiarata {len}, disponibili {left}");
+        return len;
     }
 
     /// <summary>

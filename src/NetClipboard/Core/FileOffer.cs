@@ -30,6 +30,9 @@ public sealed class FileOffer
 {
     public const int MaxEntries = 50_000;
 
+    /// <summary>Byte minimi di una voce sul filo: indice, flag, dimensione, lunghezza del nome.</summary>
+    private const int MinEntryBytes = 4 + 1 + 8 + 4;
+
     public Guid OfferId { get; set; }
     public string OwnerDeviceId { get; set; } = "";
     public string OwnerName { get; set; } = "";
@@ -81,7 +84,13 @@ public sealed class FileOffer
             OwnerDeviceId = ReadString(r),
             OwnerName = ReadString(r),
         };
+        // Come per le lunghezze: il numero di voci arriva dal mittente. Ogni voce
+        // occupa almeno 17 byte sul filo, quindi piu' di cosi' non ce ne stanno.
         var count = r.ReadInt32();
+        var room = (r.BaseStream.Length - r.BaseStream.Position) / MinEntryBytes;
+        if (count < 0 || count > Math.Min(MaxEntries, room))
+            throw new InvalidDataException($"offerta con {count} voci dichiarate, spazio per {room}");
+
         for (var i = 0; i < count; i++)
         {
             offer.Entries.Add(new FileEntry
@@ -102,11 +111,8 @@ public sealed class FileOffer
         w.Write(b);
     }
 
-    private static string ReadString(BinaryReader r)
-    {
-        var len = r.ReadInt32();
-        return Encoding.UTF8.GetString(r.ReadBytes(len));
-    }
+    private static string ReadString(BinaryReader r) =>
+        Encoding.UTF8.GetString(r.ReadBytes(ClipboardPayload.ReadLength(r)));
 
     // ----- Costruzione dai percorsi della clipboard (lato host) -----
 
