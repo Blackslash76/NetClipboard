@@ -89,7 +89,9 @@ public sealed class TrayContext : ApplicationContext
         // Menu volutamente corto: qui stanno solo le azioni di tutti i giorni.
         // Diagnostica, rete, firewall e aggiornamenti sono in Impostazioni; la
         // ricerca in rete sta in "Dispositivi e pairing", dove serve davvero.
-        var menu = new ContextMenuStrip();
+        var menu = new ContextMenuStrip { Renderer = Theme.CreateMenuRenderer() };
+        StyleMenu(menu);
+        Theme.Changed += OnThemeChanged;
         _sharingItem = new ToolStripMenuItem(L.T("tray.sharing"), null, (_, _) => ToggleSharing()) { Checked = _sharingEnabled };
         menu.Items.Add(_sharingItem);
         menu.Items.Add(new ToolStripMenuItem(L.T("tray.openHistory"), null, (_, _) => ShowHistory()));
@@ -491,6 +493,27 @@ public sealed class TrayContext : ApplicationContext
             ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
+    /// <summary>
+    /// Il menu della tray non e' una finestra: non passa da Theme.Attach, quindi
+    /// i suoi colori fissi vanno riapplicati a mano. Il renderer invece legge la
+    /// palette a ogni disegno e si adatta da solo.
+    /// </summary>
+    private static void StyleMenu(ContextMenuStrip menu)
+    {
+        menu.BackColor = Theme.Card;
+        menu.ForeColor = Theme.TextMain;
+    }
+
+    private void OnThemeChanged()
+    {
+        // L'avviso arriva dal thread di SystemEvents: si rientra sulla UI.
+        if (!_monitor.IsHandleCreated) return;
+        _monitor.BeginInvoke(() =>
+        {
+            if (_tray.ContextMenuStrip != null) StyleMenu(_tray.ContextMenuStrip);
+        });
+    }
+
     private void OnPeersChanged()
     {
         if (_monitor.IsHandleCreated) _monitor.BeginInvoke(UpdateTrayText);
@@ -541,8 +564,7 @@ public sealed class TrayContext : ApplicationContext
         // la distinzione che tutto il resto dell'interfaccia tiene ferma.
         var peers = _transport.Peers.Where(p => !p.Trusted).ToList();
 
-        var fileCount = offer.Entries.Count(e => !e.IsDir);
-        using var dlg = new RecipientDialog(peers, fileCount, FormatSize(offer.TotalSize));
+        using var dlg = new RecipientDialog(peers, offer, FormatSize(offer.TotalSize));
         if (dlg.ShowDialog() != DialogResult.OK || dlg.Chosen == null) return;
 
         _offerStore.Register(offer);
@@ -806,6 +828,7 @@ public sealed class TrayContext : ApplicationContext
 
     private void ExitApp()
     {
+        Theme.Changed -= OnThemeChanged;
         _tray.Visible = false;
         _updateTimer?.Dispose();
         _settingsForm?.Dispose();

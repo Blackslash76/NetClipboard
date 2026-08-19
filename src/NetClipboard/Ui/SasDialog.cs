@@ -20,11 +20,7 @@ public sealed class SasDialog : ScaledForm
     private readonly Label _title = new();
     private readonly Label _peer;
     private readonly Label _code;
-    private readonly Label _warn = new()
-    {
-        TextAlign = ContentAlignment.MiddleCenter,
-        ForeColor = Color.Silver,
-    };
+    private readonly Label _warn = new() { TextAlign = ContentAlignment.MiddleCenter };
     private readonly Button _ok = new() { DialogResult = DialogResult.OK };
     private readonly Button _cancel = new() { DialogResult = DialogResult.Cancel };
 
@@ -36,8 +32,6 @@ public sealed class SasDialog : ScaledForm
         MaximizeBox = false;
         MinimizeBox = false;
         TopMost = true;
-        BackColor = Color.FromArgb(28, 28, 34);
-        ForeColor = Color.White;
 
         Text = L.T("sas.title");
         _title.Text = L.T("sas.heading");
@@ -48,22 +42,18 @@ public sealed class SasDialog : ScaledForm
         _peer = new Label
         {
             Text = L.T("sas.peerLine", prompt.PeerName, prompt.Fingerprint),
-            ForeColor = Color.Gainsboro,
         };
         _code = new Label
         {
             Text = string.Join("  ", prompt.Sas.ToCharArray()),
             TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Color.FromArgb(120, 200, 255),
         };
 
         foreach (var b in new[] { _ok, _cancel })
         {
             b.FlatStyle = FlatStyle.Flat;
-            b.ForeColor = Color.White;
-            b.BackColor = Color.FromArgb(55, 55, 66);
+            b.FlatAppearance.BorderSize = 1;
         }
-        _ok.BackColor = Color.FromArgb(30, 120, 200);
         AcceptButton = _ok;
         CancelButton = _cancel;
 
@@ -81,6 +71,23 @@ public sealed class SasDialog : ScaledForm
             }
         };
         _timer.Start();
+        Theme.Attach(this, ApplyTheme);
+    }
+
+    private void ApplyTheme()
+    {
+        BackColor = Theme.Bg;
+        ForeColor = Theme.TextMain;
+        _warn.ForeColor = Theme.TextMuted;
+        _peer.ForeColor = Theme.TextMain;
+        _code.ForeColor = Theme.Info;
+
+        _cancel.BackColor = Theme.ButtonFace;
+        _cancel.ForeColor = Theme.ButtonText;
+        _cancel.FlatAppearance.BorderColor = Theme.Divider;
+        _ok.BackColor = Theme.Primary;
+        _ok.ForeColor = Theme.OnAccent;
+        _ok.FlatAppearance.BorderColor = Theme.Primary;
     }
 
     protected override Font CreateBaseFont() => PxFont("Segoe UI", 12.5f);

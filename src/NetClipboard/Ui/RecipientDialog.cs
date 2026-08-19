@@ -1,4 +1,5 @@
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using NetClipboard.Core;
@@ -16,49 +17,46 @@ namespace NetClipboard.Ui;
 ///
 /// Disegnata a mano come il pannello della cronologia: un ListBox owner-drawn
 /// sfarfalla, perche' il disegno delle righe non passa dal doppio buffering
-/// gestito (vedi ClipList in HistoryForm).
+/// gestito (vedi ClipList in HistoryForm). I colori arrivano da <see cref="Theme"/>,
+/// che segue la modalita' chiara/scura di Windows.
 /// </summary>
 public sealed class RecipientDialog : ScaledForm
 {
-    private static readonly Color Bg = Color.FromArgb(28, 28, 34);
-    private static readonly Color Card = Color.FromArgb(38, 38, 47);
-    private static readonly Color HoverBg = Color.FromArgb(48, 48, 60);
-    private static readonly Color SelBg = Color.FromArgb(52, 50, 74);
-    private static readonly Color TextMain = Color.FromArgb(238, 238, 244);
-    private static readonly Color TextMuted = Color.FromArgb(150, 152, 165);
-    private static readonly Color Accent = Color.FromArgb(120, 92, 245);
-    private static readonly Color Divider = Color.FromArgb(48, 48, 59);
-
     // Misure logiche (a 96 DPI), scalate da P().
-    private const int ClientW = 440;
+    private const int ClientW = 460;
     private const int Pad = 20;
-    private const int HeaderH = 74;
+    private const int HeaderH = 80;
+    private const int BadgeSz = 46;
     private const int RowH = 56;
     private const int MaxRows = 5;
 
+    /// <summary>Oltre questa lunghezza il nome di un file viene accorciato nel mezzo.</summary>
+    private const int MaxNameChars = 26;
+
     private readonly IReadOnlyList<Peer> _peers;
+    private readonly IReadOnlyList<string> _names;
     private readonly int _fileCount;
+    private readonly int _dirCount;
     private readonly string _sizeText;
 
     private readonly PeerList _list;
-    private readonly Label _empty = new()
-    {
-        TextAlign = ContentAlignment.MiddleCenter,
-        ForeColor = TextMuted,
-    };
-    private readonly Label _note = new() { ForeColor = TextMuted };
+    private readonly Label _empty = new() { TextAlign = ContentAlignment.MiddleCenter };
+    private readonly Label _note = new();
     private readonly Button _send = new() { DialogResult = DialogResult.OK };
     private readonly Button _cancel = new() { DialogResult = DialogResult.Cancel };
 
-    private Font _fTitle = null!, _fSub = null!, _fName = null!, _fDetail = null!, _fAvatar = null!, _fNote = null!;
+    private Font _fTitle = null!, _fSub = null!, _fName = null!, _fDetail = null!,
+                 _fAvatar = null!, _fNote = null!, _fCount = null!;
 
     /// <summary>Destinatario scelto, valorizzato solo se la finestra esce con OK.</summary>
     public Peer? Chosen { get; private set; }
 
-    public RecipientDialog(IReadOnlyList<Peer> peers, int fileCount, string sizeText)
+    public RecipientDialog(IReadOnlyList<Peer> peers, FileOffer offer, string sizeText)
     {
         _peers = peers;
-        _fileCount = fileCount;
+        _names = offer.TopLevelNames.Select(n => Shorten(n, MaxNameChars)).ToList();
+        _fileCount = offer.FileCount;
+        _dirCount = offer.DirCount;
         _sizeText = sizeText;
 
         Icon = IconFactory.Shared;
@@ -67,8 +65,6 @@ public sealed class RecipientDialog : ScaledForm
         MaximizeBox = false;
         MinimizeBox = false;
         TopMost = true;
-        BackColor = Bg;
-        ForeColor = TextMain;
         DoubleBuffered = true;
 
         Text = L.T("recipient.title");
@@ -81,19 +77,12 @@ public sealed class RecipientDialog : ScaledForm
         {
             b.FlatStyle = FlatStyle.Flat;
             b.FlatAppearance.BorderSize = 0;
-            b.ForeColor = Color.White;
-            b.BackColor = Color.FromArgb(58, 58, 70);
         }
         // Un pulsante piatto disabilitato conserva il colore di sfondo: senza questo
         // "Invia" resterebbe acceso anche quando non c'e' nessuno a cui mandare.
-        _send.EnabledChanged += (_, _) =>
-        {
-            _send.BackColor = _send.Enabled ? Accent : Color.FromArgb(52, 52, 62);
-            _send.ForeColor = _send.Enabled ? Color.White : TextMuted;
-        };
-        _send.BackColor = Accent;
+        _send.EnabledChanged += (_, _) => PaintSendButton();
 
-        _list = new PeerList { BackColor = Bg };
+        _list = new PeerList();
         _list.SetItems(peers);
         _list.DrawRow += DrawPeerRow;
         _list.Activated += () => { if (Confirm()) { DialogResult = DialogResult.OK; Close(); } };
@@ -110,6 +99,29 @@ public sealed class RecipientDialog : ScaledForm
 
         Controls.AddRange(new Control[] { _list, _empty, _note, _send, _cancel });
         Paint += DrawChrome;
+        Theme.Attach(this, ApplyTheme);
+    }
+
+    private void ApplyTheme()
+    {
+        BackColor = Theme.Bg;
+        ForeColor = Theme.TextMain;
+        _list.BackColor = Theme.Bg;
+        _empty.ForeColor = Theme.TextMuted;
+        _note.ForeColor = Theme.TextMuted;
+        _cancel.BackColor = Theme.ButtonFace;
+        _cancel.ForeColor = Theme.ButtonText;
+        _cancel.FlatAppearance.BorderColor = Theme.Divider;
+        _cancel.FlatAppearance.BorderSize = 1;
+        PaintSendButton();
+    }
+
+    private void PaintSendButton()
+    {
+        _send.BackColor = _send.Enabled ? Theme.Accent : Theme.ButtonDisabledFace;
+        _send.ForeColor = _send.Enabled ? Theme.OnAccent : Theme.TextSpent;
+        _send.FlatAppearance.BorderColor = _send.Enabled ? Theme.Accent : Theme.Divider;
+        _send.FlatAppearance.BorderSize = _send.Enabled ? 0 : 1;
     }
 
     private bool Confirm()
@@ -129,6 +141,7 @@ public sealed class RecipientDialog : ScaledForm
         _fDetail = PxFont("Segoe UI", 10.5f);
         _fAvatar = PxFont("Segoe UI Semibold", 13f);
         _fNote = PxFont("Segoe UI", 10f);
+        _fCount = PxFont("Segoe UI Semibold", 10.5f);
 
         _note.Font = _fNote;
         _empty.Font = _fSub;
@@ -161,27 +174,136 @@ public sealed class RecipientDialog : ScaledForm
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         var header = new Rectangle(0, 0, Width, P(HeaderH));
-        using (var hb = new SolidBrush(Color.FromArgb(33, 33, 41)))
+        using (var hb = new SolidBrush(Theme.HeaderBg))
             g.FillRectangle(hb, header);
-        using (var line = new Pen(Divider))
+        using (var line = new Pen(Theme.Divider))
             g.DrawLine(line, 0, header.Bottom - 1, Width, header.Bottom - 1);
 
-        // Riquadro col numero di file: dice subito la sostanza dell'invio.
-        var box = new Rectangle(P(Pad), P(18), P(38), P(38));
-        using (var grad = new LinearGradientBrush(box,
-                   Color.FromArgb(240, 170, 60), Color.FromArgb(220, 130, 40),
-                   LinearGradientMode.ForwardDiagonal))
-            g.FillRoundedRect(grad, box, P(9));
-        TextRenderer.DrawText(g, _fileCount.ToString(), _fAvatar, box, Color.White,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        var box = new Rectangle(P(Pad), P((HeaderH - BadgeSz) / 2), P(BadgeSz), P(BadgeSz));
+        DrawFilesBadge(g, box);
 
         var textLeft = box.Right + P(14);
+        var textW = Width - textLeft - P(Pad);
         TextRenderer.DrawText(g, L.T("recipient.heading"), _fTitle,
-            new Rectangle(textLeft, P(16), Width - textLeft - P(Pad), P(22)), TextMain,
+            new Rectangle(textLeft, P(19), textW, P(24)), Theme.TextMain,
             TextFormatFlags.Left | TextFormatFlags.NoPadding);
-        TextRenderer.DrawText(g, L.T("recipient.subtitle", _fileCount, _sizeText), _fSub,
-            new Rectangle(textLeft, P(40), Width - textLeft - P(Pad), P(20)), TextMuted,
-            TextFormatFlags.Left | TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(g, Summary(), _fSub,
+            new Rectangle(textLeft, P(45), textW, P(20)), Theme.TextMuted,
+            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+    }
+
+    /// <summary>
+    /// Cosa si sta mandando, detto con i nomi veri: "Pippo.pdf, pluto.txt e altri
+    /// 15 file (2 MB)". Un conteggio nudo non dice se hai preso i file giusti.
+    /// </summary>
+    private string Summary() => _names.Count switch
+    {
+        0 => L.T("recipient.subtitle", _fileCount, _sizeText),   // nessun nome leggibile: si ripiega sul conteggio
+        1 => L.T("recipient.summaryOne", _names[0], _sizeText),
+        2 => L.T("recipient.summaryTwo", _names[0], _names[1], _sizeText),
+        3 => L.T("recipient.summaryThree", _names[0], _names[1], _names[2], _sizeText),
+        _ => L.T(_dirCount > 0 ? "recipient.summaryManyItems" : "recipient.summaryManyFiles",
+                 _names[0], _names[1], _names.Count - 2, _sizeText),
+    };
+
+    /// <summary>
+    /// Nome accorciato nel mezzo, conservando l'estensione: e' l'estensione a dire
+    /// di che cosa si tratta, quindi e' l'ultima cosa da tagliare.
+    /// </summary>
+    private static string Shorten(string name, int max)
+    {
+        if (name.Length <= max) return name;
+        var ext = Path.GetExtension(name);
+        if (ext.Length > 6) ext = "";                    // non e' un'estensione, e' parte del nome
+        var keep = max - ext.Length - 1;
+        return keep < 4
+            ? name[..(max - 1)] + Ellipsis
+            : name[..keep] + Ellipsis + ext;
+    }
+
+    private const string Ellipsis = "…";
+
+    /// <summary>
+    /// Pila di fogli con il numero di file in un pallino: si vede a colpo d'occhio
+    /// che si sta mandando roba, e quanta, senza leggere niente.
+    /// </summary>
+    private void DrawFilesBadge(Graphics g, Rectangle box)
+    {
+        float w = box.Width;
+        float cw = w * 0.60f, ch = w * 0.78f;   // il foglio in primo piano
+        float step = w * 0.10f;                 // scarto fra un foglio e l'altro
+        float radius = Math.Max(2f, w * 0.09f);
+
+        // I due fogli dietro, sempre piu' smorzati: danno spessore alla pila senza
+        // rubare attenzione al numero.
+        for (var i = 2; i >= 1; i--)
+        {
+            var back = new RectangleF(box.X + step * i, box.Y + step * (2 - i), cw, ch);
+            using var b = new SolidBrush(Color.FromArgb(i == 2 ? 80 : 150, Theme.FileWarmA));
+            g.FillRoundedRect(b, back, radius);
+        }
+
+        // Il foglio davanti ha l'angolo tagliato invece che stondato: e' la piega
+        // a far leggere "documento", e su un angolo tondo sembrerebbe appiccicata.
+        var front = new RectangleF(box.X, box.Y + step * 2, cw, ch);
+        var fold = cw * 0.32f;
+        using (var path = DocumentPath(front, radius, fold))
+        using (var grad = new LinearGradientBrush(
+                   new RectangleF(front.X, front.Y, front.Width + 1, front.Height + 1),
+                   Theme.FileWarmA, Theme.FileWarmB, LinearGradientMode.ForwardDiagonal))
+            g.FillPath(grad, path);
+
+        using (var lighter = new SolidBrush(Color.FromArgb(105, 255, 255, 255)))
+            g.FillPolygon(lighter, new[]
+            {
+                new PointF(front.Right - fold, front.Y),
+                new PointF(front.Right, front.Y + fold),
+                new PointF(front.Right - fold, front.Y + fold),
+            });
+
+        // Righe di "testo" sul foglio: solo se c'e' spazio perche' si distinguano.
+        if (front.Height >= 30)
+        {
+            var lh = Math.Max(1f, w * 0.045f);
+            var lx = front.X + cw * 0.18f;
+            var ly = front.Y + ch * 0.46f;
+            using var ink = new SolidBrush(Color.FromArgb(115, 255, 255, 255));
+            foreach (var factor in new[] { 0.62f, 0.62f, 0.40f })
+            {
+                g.FillRoundedRect(ink, new RectangleF(lx, ly, cw * factor, lh), lh / 2);
+                ly += lh * 2.6f;
+            }
+        }
+
+        // Pallino con il conteggio, appoggiato in basso a destra sulla pila.
+        var d = w * 0.46f;
+        var dot = new RectangleF(box.Right - d, box.Bottom - d, d, d);
+        using (var ring = new SolidBrush(Theme.HeaderBg))
+            g.FillEllipse(ring, RectangleF.Inflate(dot, w * 0.03f, w * 0.03f));
+        using (var fill = new SolidBrush(Theme.Accent))
+            g.FillEllipse(fill, dot);
+        TextRenderer.DrawText(g, CountLabel(), _fCount, Rectangle.Round(dot), Theme.OnAccent,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+    }
+
+    /// <summary>Sagoma del foglio: angoli stondati, tranne quello in alto a destra, piegato.</summary>
+    private static GraphicsPath DocumentPath(RectangleF r, float radius, float fold)
+    {
+        var d = Math.Max(0.5f, radius * 2);
+        var path = new GraphicsPath();
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddLine(r.Right - fold, r.Y, r.Right, r.Y + fold);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    /// <summary>Nel pallino ci stanno due cifre: oltre le 99 si dice "tante".</summary>
+    private string CountLabel()
+    {
+        var n = _fileCount > 0 ? _fileCount : _names.Count;
+        return n > 99 ? L.T("recipient.countOverflow") : n.ToString();
     }
 
     private void DrawPeerRow(Graphics g, Peer peer, Rectangle bounds, bool selected, bool hovered)
@@ -189,29 +311,28 @@ public sealed class RecipientDialog : ScaledForm
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         var row = new Rectangle(bounds.Left + P(6), bounds.Top + P(4), bounds.Width - P(12), bounds.Height - P(8));
-        using (var rb = new SolidBrush(selected ? SelBg : hovered ? HoverBg : Card))
+        using (var rb = new SolidBrush(selected ? Theme.Sel : hovered ? Theme.Hover : Theme.Card))
             g.FillRoundedRect(rb, row, P(9));
         if (selected)
-            using (var acc = new SolidBrush(Accent))
+            using (var acc = new SolidBrush(Theme.Accent))
                 g.FillRoundedRect(acc, new Rectangle(row.Left, row.Top + P(6), P(3), row.Height - P(12)), P(2));
 
         // Iniziali su tinta stabile: lo stesso destinatario ha sempre lo stesso
         // colore, cosi' si riconosce a colpo d'occhio senza leggere.
         var av = P(34);
         var avatar = new Rectangle(row.Left + P(12), row.Top + (row.Height - av) / 2, av, av);
-        var tint = TintFor(peer.DeviceId);
-        using (var ab = new SolidBrush(tint))
+        using (var ab = new SolidBrush(TintFor(peer.DeviceId)))
             g.FillEllipse(ab, avatar);
-        TextRenderer.DrawText(g, Initials(peer.Label), _fAvatar, avatar, Color.White,
+        TextRenderer.DrawText(g, Initials(peer.Label), _fAvatar, avatar, Theme.OnAccent,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 
         var left = avatar.Right + P(12);
         var w = row.Right - left - P(12);
         TextRenderer.DrawText(g, peer.Label, _fName,
-            new Rectangle(left, row.Top + P(8), w, P(20)), TextMain,
+            new Rectangle(left, row.Top + P(8), w, P(20)), Theme.TextMain,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
         TextRenderer.DrawText(g, L.T("recipient.peerDetail", peer.Address), _fDetail,
-            new Rectangle(left, row.Top + P(28), w, P(18)), TextMuted,
+            new Rectangle(left, row.Top + P(28), w, P(18)), Theme.TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
     }
 
@@ -228,7 +349,7 @@ public sealed class RecipientDialog : ScaledForm
     {
         var h = SHA256.HashData(Encoding.UTF8.GetBytes(deviceId ?? ""));
         var hue = h[0] / 255.0 * 360.0;
-        return FromHsl(hue, 0.45, 0.48);
+        return FromHsl(hue, 0.45, Theme.AvatarLightness);
     }
 
     private static Color FromHsl(double h, double s, double l)
@@ -250,8 +371,8 @@ public sealed class RecipientDialog : ScaledForm
 
     private void DisposeFonts()
     {
-        _fTitle?.Dispose(); _fSub?.Dispose(); _fName?.Dispose();
-        _fDetail?.Dispose(); _fAvatar?.Dispose(); _fNote?.Dispose();
+        _fTitle?.Dispose(); _fSub?.Dispose(); _fName?.Dispose(); _fDetail?.Dispose();
+        _fAvatar?.Dispose(); _fNote?.Dispose(); _fCount?.Dispose();
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

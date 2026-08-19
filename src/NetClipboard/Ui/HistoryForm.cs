@@ -13,18 +13,6 @@ namespace NetClipboard.Ui;
 /// </summary>
 public sealed class HistoryForm : Form
 {
-    private static readonly Color Bg = Color.FromArgb(24, 24, 30);
-    private static readonly Color Card = Color.FromArgb(32, 32, 40);
-    private static readonly Color TextMain = Color.FromArgb(238, 238, 244);
-    private static readonly Color TextMuted = Color.FromArgb(150, 152, 165);
-    private static readonly Color TextSpent = Color.FromArgb(104, 106, 118);
-    private static readonly Color AccentA = Color.FromArgb(120, 92, 245);
-    private static readonly Color AccentB = Color.FromArgb(56, 180, 220);
-    private static readonly Color SelBg = Color.FromArgb(52, 50, 74);
-    private static readonly Color HoverBg = Color.FromArgb(40, 40, 50);
-    private static readonly Color HeaderBg = Color.FromArgb(30, 30, 38);
-    private static readonly Color Divider = Color.FromArgb(46, 46, 57);
-
     // Misure logiche (a 96 DPI); vengono scalate da _scale.
     //
     // Il pannello e' uno strumento di scelta rapida, non una pagina da leggere:
@@ -71,12 +59,12 @@ public sealed class HistoryForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         DoubleBuffered = true;
-        BackColor = Bg;
+        BackColor = Theme.Bg;
 
         _list = new ClipList
         {
-            BackColor = Bg,
-            ForeColor = TextMain,
+            BackColor = Theme.Bg,
+            ForeColor = Theme.TextMain,
         };
         _list.DrawRow += DrawRow;
         _list.KeyDown += OnKeyDown;
@@ -85,6 +73,7 @@ public sealed class HistoryForm : Form
 
         Deactivate += (_, _) => Hide();
         Paint += OnPaintChrome;
+        Theme.Attach(this, ApplyTheme);
 
         _expiryTick.Tick += (_, _) =>
         {
@@ -117,6 +106,13 @@ public sealed class HistoryForm : Form
 
             if (!alive) _expiryTick.Stop();
         };
+    }
+
+    private void ApplyTheme()
+    {
+        BackColor = Theme.Bg;
+        _list.BackColor = Theme.Bg;
+        _list.ForeColor = Theme.TextMain;
     }
 
     private int P(double v) => (int)Math.Round(v * _scale);
@@ -254,21 +250,21 @@ public sealed class HistoryForm : Form
         // il contenuto, non l'intestazione. Resta un solo accento, il segno a
         // sinistra del nome, che fa da marchio senza rubare spazio.
         var headerRect = new Rectangle(0, 0, Width, P(HeaderH));
-        using (var hb = new SolidBrush(HeaderBg))
+        using (var hb = new SolidBrush(Theme.HeaderBg))
             g.FillRectangle(hb, headerRect);
-        using (var line = new Pen(Divider))
+        using (var line = new Pen(Theme.Divider))
             g.DrawLine(line, 0, headerRect.Bottom - 1, Width, headerRect.Bottom - 1);
 
         var mark = new Rectangle(P(12), (P(HeaderH) - P(14)) / 2, P(14), P(14));
-        using (var grad = new LinearGradientBrush(mark, AccentA, AccentB, LinearGradientMode.ForwardDiagonal))
+        using (var grad = new LinearGradientBrush(mark, Theme.Accent, Theme.AccentAlt, LinearGradientMode.ForwardDiagonal))
             g.FillRoundedRect(grad, mark, P(4));
 
         TextRenderer.DrawText(g, L.T("app.name"), _fTitle,
-            new Rectangle(mark.Right + P(8), 0, P(180), P(HeaderH)), TextMain,
+            new Rectangle(mark.Right + P(8), 0, P(180), P(HeaderH)), Theme.TextMain,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 
         TextRenderer.DrawText(g, L.T("history.hint"), _fHint,
-            new Rectangle(Width - P(200), 0, P(188), P(HeaderH)), TextMuted,
+            new Rectangle(Width - P(200), 0, P(188), P(HeaderH)), Theme.TextMuted,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
     }
 
@@ -277,11 +273,11 @@ public sealed class HistoryForm : Form
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
         var row = new Rectangle(bounds.Left + P(5), bounds.Top + P(3), bounds.Width - P(10), bounds.Height - P(6));
-        var face = selected ? SelBg : hovered ? HoverBg : Card;
+        var face = selected ? Theme.Sel : hovered ? Theme.Hover : Theme.Card;
         using (var rb = new SolidBrush(face))
             g.FillRoundedRect(rb, row, P(8));
         if (selected)
-            using (var accent = new SolidBrush(AccentA))
+            using (var accent = new SolidBrush(Theme.Accent))
                 g.FillRoundedRect(accent, new Rectangle(row.Left, row.Top + P(5), P(3), row.Height - P(10)), P(2));
 
         var iconSz = P(AvatarSz);
@@ -308,7 +304,7 @@ public sealed class HistoryForm : Form
             var (c1, c2, glyph) = BadgeStyle(item);
             using (var grad = new LinearGradientBrush(icon, c1, c2, LinearGradientMode.ForwardDiagonal))
                 g.FillRoundedRect(grad, icon, P(7));
-            TextRenderer.DrawText(g, glyph, _fBadge, icon, Color.White,
+            TextRenderer.DrawText(g, glyph, _fBadge, icon, Theme.OnAccent,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
         }
 
@@ -320,7 +316,7 @@ public sealed class HistoryForm : Form
         // L'avatar di una riga spenta si smorza, cosi' la riga si legge come
         // disattivata gia' dalla coda dell'occhio, prima di leggere l'etichetta.
         if (spent)
-            using (var veil = new SolidBrush(Color.FromArgb(150, Card)))
+            using (var veil = new SolidBrush(Color.FromArgb(150, Theme.Card)))
                 g.FillRectangle(veil, slot);
 
         var textLeft = slot.Right + P(10);
@@ -333,13 +329,13 @@ public sealed class HistoryForm : Form
             var tag = L.T(item.Used ? "history.used" : "history.expired");
             var tagW = TextRenderer.MeasureText(tag, _fMeta).Width + P(4);
             TextRenderer.DrawText(g, tag, _fMeta,
-                new Rectangle(row.Right - P(10) - tagW, row.Top + P(6), tagW, P(18)), TextSpent,
+                new Rectangle(row.Right - P(10) - tagW, row.Top + P(6), tagW, P(18)), Theme.TextSpent,
                 TextFormatFlags.Right | TextFormatFlags.NoPadding);
             textWidth -= tagW + P(8);
         }
 
         TextRenderer.DrawText(g, item.Preview, _fPreview,
-            new Rectangle(textLeft, row.Top + P(6), textWidth, P(18)), spent ? TextSpent : TextMain,
+            new Rectangle(textLeft, row.Top + P(6), textWidth, P(18)), spent ? Theme.TextSpent : Theme.TextMain,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
 
         var pin = item.Pinned ? "📌 " : "";
@@ -349,7 +345,7 @@ public sealed class HistoryForm : Form
         if (item.FromExternal) origin = L.T("history.external", origin);
         var meta = L.T("history.meta", pin, origin, LocalTime(item.TimestampUtc), toFetch);
         TextRenderer.DrawText(g, meta, _fMeta,
-            new Rectangle(textLeft, row.Top + P(24), textWidth, P(16)), spent ? TextSpent : TextMuted,
+            new Rectangle(textLeft, row.Top + P(24), textWidth, P(16)), spent ? Theme.TextSpent : Theme.TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
     }
 
@@ -368,9 +364,7 @@ public sealed class HistoryForm : Form
     /// </summary>
     private static void DrawExpiryRing(Graphics g, Rectangle box, double fraction)
     {
-        var color = fraction <= 0.25
-            ? Color.FromArgb(240, 150, 60)
-            : Color.FromArgb(110, 170, 240);
+        var color = fraction <= 0.25 ? Theme.Warn : Theme.Info;
 
         var thickness = Math.Max(2f, box.Width / 14f);
         var arc = Rectangle.Inflate(box, (int)(-thickness / 2), (int)(-thickness / 2));
@@ -378,7 +372,7 @@ public sealed class HistoryForm : Form
         var saved = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        using (var track = new Pen(Color.FromArgb(60, 130, 135, 155), thickness))
+        using (var track = new Pen(Color.FromArgb(60, Theme.TextMuted), thickness))
             g.DrawEllipse(track, arc);
 
         if (fraction > 0)
@@ -390,9 +384,9 @@ public sealed class HistoryForm : Form
 
     private static (Color, Color, string) BadgeStyle(HistoryItem item) => item.Kind switch
     {
-        PayloadKind.Text => (Color.FromArgb(70, 120, 235), Color.FromArgb(60, 90, 200), "T"),
-        PayloadKind.Files => (Color.FromArgb(240, 170, 60), Color.FromArgb(220, 130, 40), item.DirCount > 0 ? "🗀" : "🗎"),
-        _ => (Color.FromArgb(60, 170, 120), Color.FromArgb(40, 140, 100), "?"),
+        PayloadKind.Text => (Theme.TextKindA, Theme.TextKindB, "T"),
+        PayloadKind.Files => (Theme.FileWarmA, Theme.FileWarmB, item.DirCount > 0 ? "🗀" : "🗎"),
+        _ => (Theme.OtherKindA, Theme.OtherKindB, "?"),
     };
 
     private Image? GetThumb(HistoryItem item, int size)
@@ -629,7 +623,7 @@ public sealed class HistoryForm : Form
 
             var saved = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            using (var b = new SolidBrush(Color.FromArgb(90, 150, 152, 165)))
+            using (var b = new SolidBrush(Color.FromArgb(90, Theme.TextMuted)))
                 g.FillRoundedRect(b, bar, ScrollbarW / 2);
             g.SmoothingMode = saved;
         }
@@ -643,6 +637,23 @@ internal static class GraphicsRoundedExtensions
         using var path = new GraphicsPath();
         path.AddRoundedRectangle(r, radius);
         g.FillPath(brush, path);
+    }
+
+    public static void FillRoundedRect(this Graphics g, Brush brush, RectangleF r, float radius)
+    {
+        using var path = new GraphicsPath();
+        path.AddRoundedRectangle(r, radius);
+        g.FillPath(brush, path);
+    }
+
+    public static void AddRoundedRectangle(this GraphicsPath path, RectangleF r, float radius)
+    {
+        var d = Math.Max(0.5f, radius * 2);
+        path.AddArc(r.X, r.Y, d, d, 180, 90);
+        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
     }
 
     public static void AddRoundedRectangle(this GraphicsPath path, Rectangle r, int radius)

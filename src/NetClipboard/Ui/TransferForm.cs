@@ -12,13 +12,6 @@ namespace NetClipboard.Ui;
 /// </summary>
 public sealed class TransferForm : ScaledForm
 {
-    private static readonly Color Bg = Color.FromArgb(24, 24, 30);
-    private static readonly Color Track = Color.FromArgb(48, 48, 60);
-    private static readonly Color TextMain = Color.FromArgb(238, 238, 244);
-    private static readonly Color TextMuted = Color.FromArgb(152, 154, 168);
-    private static readonly Color AccentA = Color.FromArgb(120, 92, 245);
-    private static readonly Color AccentB = Color.FromArgb(56, 180, 220);
-
     // Misure logiche (a 96 DPI).
     private const int ClientW = 470;
     private const int Pad = 20;
@@ -57,14 +50,10 @@ public sealed class TransferForm : ScaledForm
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         DoubleBuffered = true;
-        BackColor = Bg;
-        ForeColor = TextMain;
 
         _cancelBtn.Text = L.T("common.cancel");
         _cancelBtn.FlatStyle = FlatStyle.Flat;
-        _cancelBtn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 84);
-        _cancelBtn.ForeColor = TextMain;
-        _cancelBtn.BackColor = Color.FromArgb(52, 52, 64);
+        _cancelBtn.FlatAppearance.BorderSize = 1;
         _cancelBtn.Click += (_, _) => CancelTransfer();
         Controls.Add(_cancelBtn);
 
@@ -76,6 +65,16 @@ public sealed class TransferForm : ScaledForm
         };
 
         _lastTick = Environment.TickCount64;
+        Theme.Attach(this, ApplyTheme);
+    }
+
+    private void ApplyTheme()
+    {
+        BackColor = Theme.Bg;
+        ForeColor = Theme.TextMain;
+        _cancelBtn.BackColor = Theme.ButtonFace;
+        _cancelBtn.ForeColor = Theme.ButtonText;
+        _cancelBtn.FlatAppearance.BorderColor = Theme.Divider;
     }
 
     // Non attivare mai la finestra: il fuoco deve restare all'app di destinazione,
@@ -173,27 +172,27 @@ public sealed class TransferForm : ScaledForm
         var w = Width - P(2 * Pad);
         var y = P(Pad);
 
-        TextRenderer.DrawText(g, _title, _fTitle, new Point(left, y), TextMain, Color.Transparent);
+        TextRenderer.DrawText(g, _title, _fTitle, new Point(left, y), Theme.TextMain, Color.Transparent);
         y += P(24);
-        TextRenderer.DrawText(g, _subtitle, _fSub, new Point(left, y), TextMuted, Color.Transparent);
+        TextRenderer.DrawText(g, _subtitle, _fSub, new Point(left, y), Theme.TextMuted, Color.Transparent);
         y += P(26);
 
         DrawBar(g, new Rectangle(left, y, w, P(BarH)));
         y += P(BarH + 12);
 
-        TextRenderer.DrawText(g, StatsLine(), _fStats, new Rectangle(left, y, w, P(18)), TextMain,
+        TextRenderer.DrawText(g, StatsLine(), _fStats, new Rectangle(left, y, w, P(18)), Theme.TextMain,
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         y += P(22);
 
         var name = _cancelling ? L.T("transfer.cancelling") : _current;
-        TextRenderer.DrawText(g, name, _fName, new Rectangle(left, y, w, P(18)), TextMuted,
+        TextRenderer.DrawText(g, name, _fName, new Rectangle(left, y, w, P(18)), Theme.TextMuted,
             TextFormatFlags.Left | TextFormatFlags.PathEllipsis | TextFormatFlags.NoPadding);
     }
 
     private void DrawBar(Graphics g, Rectangle r)
     {
         var radius = r.Height / 2;
-        using (var tb = new SolidBrush(Track))
+        using (var tb = new SolidBrush(Theme.Track))
             g.FillRoundedRect(tb, r, radius);
 
         Rectangle fill;
@@ -213,7 +212,7 @@ public sealed class TransferForm : ScaledForm
         }
 
         if (fill.Width <= 0) return;
-        using var grad = new LinearGradientBrush(r, AccentA, AccentB, LinearGradientMode.Horizontal);
+        using var grad = new LinearGradientBrush(r, Theme.Accent, Theme.AccentAlt, LinearGradientMode.Horizontal);
         var clip = g.Clip;
         g.SetClip(fill, CombineMode.Intersect);
         g.FillRoundedRect(grad, r, radius);

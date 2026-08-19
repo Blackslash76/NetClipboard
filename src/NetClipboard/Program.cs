@@ -76,6 +76,16 @@ internal static class Program
             return 0;
 
         ApplicationConfiguration.Initialize();
+
+        // Modalita' chiara/scura come la vuole Windows. Questa chiamata riguarda i
+        // controlli di sistema (liste, caselle, barre di scorrimento); i disegni
+        // nostri leggono la palette da Theme. E' ancora un'API sperimentale, per
+        // questo il warning va zittito qui e solo qui.
+#pragma warning disable WFO5001
+        try { Application.SetColorMode(SystemColorMode.System); } catch { }
+#pragma warning restore WFO5001
+        Theme.Init();
+
         NetClipboard.Core.L.Init(); // lingua dei testi: prima di costruire qualunque UI
         Application.Run(new TrayContext());
         return 0;

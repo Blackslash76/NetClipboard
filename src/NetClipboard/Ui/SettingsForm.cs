@@ -62,7 +62,7 @@ public sealed class SettingsForm : ScaledForm
     private readonly Label _lblShare = new();
     private readonly Label _lblUpdateUrl = new();
     private readonly Label _lblPeers = new();
-    private readonly Label _lblPeersHint = new() { ForeColor = Color.Gray };
+    private readonly Label _lblPeersHint = new();
 
     public SettingsForm(AppConfig config)
     {
@@ -77,6 +77,15 @@ public sealed class SettingsForm : ScaledForm
         BuildControls();
         ApplyTexts();
         LoadFromConfig();
+        Theme.Attach(this, ApplyTheme);
+    }
+
+    /// <summary>Colori: base dal tema, poi le righe di spiegazione in tono minore.</summary>
+    private void ApplyTheme()
+    {
+        Theme.ApplyToControls(this);
+        _lblPeersHint.ForeColor = Theme.TextMuted;
+        _firewall.ForeColor = Theme.TextMuted;
     }
 
     /// <summary>Tutti i testi in un punto solo (catalogo <see cref="L"/>, mai literal inline).</summary>
@@ -222,10 +231,13 @@ public sealed class SettingsForm : ScaledForm
         _manualPeers.SetBounds(P(Pad), P(y), P(ClientW - 2 * Pad), P(70));
         y += 80;
 
-        // Tre bottoni in fila, stessa larghezza, sull'intera riga utile.
-        _lblMaintenance.SetBounds(P(Pad), P(y + 6), P(LabelW), P(20));
-        var btnW = (ClientW - CtlX - Pad - 16) / 3;
-        var bx = CtlX;
+        // Tre bottoni in fila, stessa larghezza. Partono subito dopo l'etichetta e
+        // non dalla colonna dei controlli: li' "Aggiornamenti" non ci stava, e un
+        // pulsante col testo tagliato non dice piu' che cosa fa.
+        const int maintLabelW = 96;
+        _lblMaintenance.SetBounds(P(Pad), P(y + 6), P(maintLabelW), P(20));
+        var bx = Pad + maintLabelW + 8;
+        var btnW = (ClientW - Pad - bx - 16) / 3;
         foreach (var b in new[] { _restartNetBtn, _logBtn, _updatesBtn })
         {
             b.SetBounds(P(bx), P(y), P(btnW), P(28));

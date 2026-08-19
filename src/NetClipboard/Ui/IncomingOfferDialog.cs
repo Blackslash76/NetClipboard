@@ -24,11 +24,7 @@ public sealed class IncomingOfferDialog : ScaledForm
     private readonly Label _title = new();
     private readonly Label _from;
     private readonly Label _preview;
-    private readonly Label _warn = new()
-    {
-        TextAlign = ContentAlignment.MiddleCenter,
-        ForeColor = Color.Silver,
-    };
+    private readonly Label _warn = new() { TextAlign = ContentAlignment.MiddleCenter };
     /// <summary>
     /// Esito del controllo antivirus. Compare solo quando l'analisi e' avvenuta
     /// davvero su questo PC: un bollino verde non veritiero sarebbe peggio del
@@ -39,6 +35,11 @@ public sealed class IncomingOfferDialog : ScaledForm
     private readonly Button _accept = new() { DialogResult = DialogResult.OK };
     private readonly Button _refuse = new() { DialogResult = DialogResult.Cancel };
 
+    /// <summary>Quale dei tre livelli di verifica si sta mostrando (decide la tinta).</summary>
+    private enum ScanTone { None, Clean, Pending, SystemGuard }
+
+    private readonly ScanTone _tone;
+
     public IncomingOfferDialog(IncomingOffer offer)
     {
         Icon = IconFactory.Shared;
@@ -47,8 +48,6 @@ public sealed class IncomingOfferDialog : ScaledForm
         MaximizeBox = false;
         MinimizeBox = false;
         TopMost = true;
-        BackColor = Color.FromArgb(28, 28, 34);
-        ForeColor = Color.White;
 
         Text = L.T("incoming.title");
         _title.Text = L.T("incoming.heading");
@@ -60,13 +59,11 @@ public sealed class IncomingOfferDialog : ScaledForm
         {
             Text = L.T("incoming.fromLine", offer.FromLabel, KindLabel(offer.Kind)),
             TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Color.Gainsboro,
         };
         _preview = new Label
         {
             Text = offer.Preview,
             TextAlign = ContentAlignment.MiddleCenter,
-            ForeColor = Color.FromArgb(120, 200, 255),
             AutoEllipsis = true,
         };
 
@@ -80,30 +77,29 @@ public sealed class IncomingOfferDialog : ScaledForm
         if (offer.Scan == ScanVerdict.Clean)
         {
             _scan.Text = L.T("incoming.verified");
-            _scan.ForeColor = Color.FromArgb(90, 210, 130);
+            _tone = ScanTone.Clean;
         }
         else if (offer.Kind == PayloadKind.Files && AntimalwareScan.Available)
         {
             _scan.Text = L.T("incoming.willVerify");
-            _scan.ForeColor = Color.FromArgb(150, 152, 165);
+            _tone = ScanTone.Pending;
         }
         else if (SystemProtection.Antivirus == ProtectionState.Active)
         {
             _scan.Text = L.T("incoming.systemProtected");
-            _scan.ForeColor = Color.FromArgb(120, 175, 235);
+            _tone = ScanTone.SystemGuard;
         }
         else
         {
+            _tone = ScanTone.None;
             _scan.Visible = false;
         }
 
         foreach (var b in new[] { _accept, _refuse })
         {
             b.FlatStyle = FlatStyle.Flat;
-            b.ForeColor = Color.White;
-            b.BackColor = Color.FromArgb(55, 55, 66);
+            b.FlatAppearance.BorderSize = 1;
         }
-        _accept.BackColor = Color.FromArgb(30, 120, 200);
         AcceptButton = _accept;
         CancelButton = _refuse;
 
@@ -121,6 +117,29 @@ public sealed class IncomingOfferDialog : ScaledForm
             }
         };
         _timer.Start();
+        Theme.Attach(this, ApplyTheme);
+    }
+
+    private void ApplyTheme()
+    {
+        BackColor = Theme.Bg;
+        ForeColor = Theme.TextMain;
+        _warn.ForeColor = Theme.TextMuted;
+        _from.ForeColor = Theme.TextMain;
+        _preview.ForeColor = Theme.Info;
+        _scan.ForeColor = _tone switch
+        {
+            ScanTone.Clean => Theme.Success,
+            ScanTone.Pending => Theme.TextMuted,
+            _ => Theme.Info,
+        };
+
+        _refuse.BackColor = Theme.ButtonFace;
+        _refuse.ForeColor = Theme.ButtonText;
+        _refuse.FlatAppearance.BorderColor = Theme.Divider;
+        _accept.BackColor = Theme.Primary;
+        _accept.ForeColor = Theme.OnAccent;
+        _accept.FlatAppearance.BorderColor = Theme.Primary;
     }
 
     private static string KindLabel(PayloadKind kind) => L.T(kind switch
@@ -144,7 +163,7 @@ public sealed class IncomingOfferDialog : ScaledForm
         _title.SetBounds(P(Pad), P(y), P(full), P(26)); y += 34;
         _from.SetBounds(P(Pad), P(y), P(full), P(42)); y += 48;
         _preview.SetBounds(P(Pad), P(y), P(full), P(44)); y += 50;
-        if (_scan.Visible) { _scan.SetBounds(P(Pad), P(y), P(full), P(22)); y += 26; }
+        if (_tone != ScanTone.None) { _scan.SetBounds(P(Pad), P(y), P(full), P(22)); y += 26; }
         _warn.SetBounds(P(Pad), P(y), P(full), P(40)); y += 48;
 
         _refuse.SetBounds(P(ClientW - Pad - 104), P(y), P(104), P(32));

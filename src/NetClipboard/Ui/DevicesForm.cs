@@ -23,14 +23,14 @@ public sealed class DevicesForm : ScaledForm
     private readonly ClipboardTransport _transport;
 
     private readonly Label _titleSelf = new();
-    private readonly Label _self = new() { ForeColor = Color.DimGray };
+    private readonly Label _self = new();
     private readonly Label _titleTrusted = new();
     private readonly Label _titleDiscovered = new();
 
     // Le due righe che spiegano la differenza fra le sezioni. E' il punto in cui
     // l'utente decide, quindi la spiegazione sta li' e non in un manuale.
-    private readonly Label _hintTrusted = new() { ForeColor = Color.Gray };
-    private readonly Label _hintDiscovered = new() { ForeColor = Color.Gray };
+    private readonly Label _hintTrusted = new();
+    private readonly Label _hintDiscovered = new();
     private readonly Label _lblManualIp = new();
 
     private readonly ListView _trusted;
@@ -73,9 +73,20 @@ public sealed class DevicesForm : ScaledForm
             _lblManualIp, _manualIp, _pairIp,
         });
 
+        Theme.Attach(this, ApplyTheme);
+
         _refresh.Tick += (_, _) => RefreshLists();
         _refresh.Start();
         RefreshLists();
+    }
+
+    /// <summary>Colori: base dal tema, poi le due righe di spiegazione in tono minore.</summary>
+    private void ApplyTheme()
+    {
+        Theme.ApplyToControls(this);
+        _self.ForeColor = Theme.TextMuted;
+        _hintTrusted.ForeColor = Theme.TextMuted;
+        _hintDiscovered.ForeColor = Theme.TextMuted;
     }
 
     /// <summary>Tutti i testi in un punto solo (catalogo <see cref="L"/>, mai literal inline).</summary>
