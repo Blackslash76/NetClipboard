@@ -1,6 +1,7 @@
 using Microsoft.Win32;
 using NetClipboard.Core;
 using NetClipboard.Net;
+using NetClipboard.Update;
 
 namespace NetClipboard.Ui;
 
@@ -14,12 +15,24 @@ public sealed class SettingsForm : ScaledForm
     private const string RunValue = "NetClipboard";
 
     // Misure logiche (a 96 DPI), scalate da P().
-    private const int ClientW = 470;
-    private const int Pad = 16;
-    private const int LabelW = 178;
-    private const int CtlX = 202;
-    private const int RowH = 32;
-    private const int FieldH = 25;
+    private const int ClientW = 600;
+    private const int Pad = 20;
+    private const int LabelW = 172;
+    private const int CtlX = 196;
+
+    /// <summary>Dove comincia la colonna di destra (le scelte a interruttore).</summary>
+    private const int RightX = 300;
+    private const int RowH = 36;
+    private const int FieldH = 26;
+
+    /// <summary>
+    /// Larghezza unica dei campi numerici: la piu' stretta che regge il valore piu'
+    /// lungo (la porta, 5 cifre). Larghezze diverse riga per riga facevano scaletta.
+    /// </summary>
+    private const int NumW = 64;
+
+    /// <summary>Distanza fra le caselle di spunta in colonna.</summary>
+    private const int CheckH = 30;
 
     private readonly AppConfig _config;
 
@@ -60,7 +73,6 @@ public sealed class SettingsForm : ScaledForm
     private readonly Label _lblShare = new();
     private readonly Label _lblUpdateUrl = new();
     private readonly Label _lblPeers = new();
-    private readonly Label _lblPeersHint = new();
 
     public SettingsForm(AppConfig config)
     {
@@ -82,14 +94,15 @@ public sealed class SettingsForm : ScaledForm
     private void ApplyTheme()
     {
         Theme.ApplyToControls(this);
-        _lblPeersHint.ForeColor = Theme.TextMuted;
         _firewall.ForeColor = Theme.TextMuted;
     }
 
     /// <summary>Tutti i testi in un punto solo (catalogo <see cref="L"/>, mai literal inline).</summary>
     private void ApplyTexts()
     {
-        Text = L.T("settings.title");
+        // La versione la si cerca quando serve dirla a qualcuno: sta dove si guarda
+        // per prima cosa, non in fondo a un menu.
+        Text = L.T("settings.titleVersion", Updater.CurrentVersion.ToString(3));
         _lblPort.Text = L.T("settings.port");
         _lblHistory.Text = L.T("settings.historySize");
         _lblVisibleRows.Text = L.T("settings.visibleRows");
@@ -106,7 +119,6 @@ public sealed class SettingsForm : ScaledForm
         _lblUpdateUrl.Text = L.T("settings.updateUrl");
         _updateUrl.PlaceholderText = L.T("settings.updateUrlPlaceholder");
         _lblPeers.Text = L.T("settings.manualPeers");
-        _lblPeersHint.Text = L.T("settings.manualPeersHint");
         _firewallBtn.Text = L.T("settings.firewallButton");
         _lblMaintenance.Text = L.T("settings.maintenance");
         _restartNetBtn.Text = L.T("settings.restartNetwork");
@@ -171,7 +183,7 @@ public sealed class SettingsForm : ScaledForm
             _lblShare, _shareText, _shareImages, _shareFiles,
             _autostart, _sendToMenu, _autoScan, _autoUpdate,
             _lblUpdateUrl, _updateUrl,
-            _lblPeers, _lblPeersHint, _manualPeers,
+            _lblPeers, _manualPeers,
             _firewall, _firewallBtn,
             _lblMaintenance, _restartNetBtn, _logBtn, _updatesBtn,
             _ok, _cancel,
@@ -180,77 +192,86 @@ public sealed class SettingsForm : ScaledForm
 
     protected override void ApplyLayout()
     {
-        var hint = PxFont("Segoe UI", 10f);
-        _lblPeersHint.Font = hint;
-
+        // Due colonne, non una.
+        //
+        // In colonna sola la finestra arrivava a 740 px logici: al 150% su uno
+        // schermo 1080p non ci stava piu' e ScaledForm attivava lo scorrimento.
+        // Una finestra di impostazioni che si scorre e' una finestra che nasconde
+        // meta' di se stessa. Siccome la meta' destra era vuota, le scelte a
+        // interruttore stanno li': la finestra diventa larga e bassa, e lo spazio
+        // fra i controlli si puo' tenere.
         var y = Pad;
-        var fieldW = ClientW - CtlX - Pad;
 
         // Etichetta a sinistra + controllo a destra, su una riga.
         void Row(Label label, Control ctl, int ctlW)
         {
-            label.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
+            label.SetBounds(P(Pad), P(y + 5), P(LabelW), P(20));
             ctl.SetBounds(P(CtlX), P(y), P(ctlW), P(FieldH));
             y += RowH;
         }
 
-        // Larghezza per le cifre che possono davvero comparire, non una taglia unica:
-        // un campo largo il doppio del suo contenuto sembra aspettarsi altro.
-        Row(_lblPort, _port, 74);          // 45654
-        Row(_lblHistory, _historySize, 64);  // 200
-        Row(_lblVisibleRows, _visibleRows, 58);  // 8
-        Row(_lblAge, _maxAgeDays, 68);     // 3650
-        Row(_lblSize, _maxMb, 68);         // 2048
+        Row(_lblPort, _port, NumW);
+        Row(_lblHistory, _historySize, NumW);
+        Row(_lblVisibleRows, _visibleRows, NumW);
+        Row(_lblAge, _maxAgeDays, NumW);
+        Row(_lblSize, _maxMb, NumW);
+        var leftBottom = y;
 
-        // Riga "Condividi": tre checkbox in fila, larghezza dettata dal testo.
-        _lblShare.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
-        var x = P(CtlX);
+        // --- colonna di destra: che cosa condividere e che cosa fare da solo ---
+        var ry = Pad;
+        _lblShare.SetBounds(P(RightX), P(ry), P(ClientW - RightX - Pad), P(20));
+        ry += 26;
+
+        var x = P(RightX);
         foreach (var cb in new[] { _shareText, _shareImages, _shareFiles })
         {
-            cb.Location = new Point(x, P(y + 3));
-            x = cb.Right + P(12);
+            cb.Location = new Point(x, P(ry));
+            x = cb.Right + P(14);
         }
-        y += RowH;
+        ry += 34;
 
-        y += 6;
         foreach (var cb in new[] { _autostart, _sendToMenu, _autoScan, _autoUpdate })
         {
-            cb.Location = new Point(P(CtlX), P(y));
-            y += 28;
+            cb.Location = new Point(P(RightX), P(ry));
+            ry += CheckH;
         }
-        y += 4;
 
-        Row(_lblUpdateUrl, _updateUrl, fieldW);
+        y = Math.Max(leftBottom, ry) + 14;
 
-        _lblPeers.SetBounds(P(Pad), P(y + 4), P(LabelW), P(20));
-        _lblPeersHint.SetBounds(P(CtlX), P(y), P(fieldW), P(32));
-        y += 36;
+        // --- sotto, a tutta larghezza ---
+        Row(_lblUpdateUrl, _updateUrl, ClientW - CtlX - Pad);
+
+        _lblPeers.SetBounds(P(Pad), P(y + 5), P(LabelW), P(20));
+        y += 28;
         _manualPeers.SetBounds(P(Pad), P(y), P(ClientW - 2 * Pad), P(70));
-        y += 80;
+        y += 70 + 22;
 
-        // Tre bottoni in fila, stessa larghezza. Partono subito dopo l'etichetta e
-        // non dalla colonna dei controlli: li' "Aggiornamenti" non ci stava, e un
-        // pulsante col testo tagliato non dice piu' che cosa fa.
+        // Manutenzione: e' un blocco a se', e si stacca dal resto con il suo spazio
+        // sopra e sotto invece che appoggiarsi alla riga precedente. I tre bottoni
+        // partono subito dopo l'etichetta e non dalla colonna dei controlli: li'
+        // "Aggiornamenti" non ci stava, e un pulsante col testo tagliato non dice
+        // piu' che cosa fa.
         const int maintLabelW = 96;
-        _lblMaintenance.SetBounds(P(Pad), P(y + 6), P(maintLabelW), P(20));
-        var bx = Pad + maintLabelW + 8;
+        _lblMaintenance.SetBounds(P(Pad), P(y + 7), P(maintLabelW), P(20));
+        var bx = Pad + maintLabelW + 12;
         var btnW = (ClientW - Pad - bx - 16) / 3;
         foreach (var b in new[] { _restartNetBtn, _logBtn, _updatesBtn })
         {
-            b.SetBounds(P(bx), P(y), P(btnW), P(28));
+            b.SetBounds(P(bx), P(y), P(btnW), P(32));
             bx += btnW + 8;
         }
-        y += 40;
+        y += 32 + 22;
 
-        _firewall.MaximumSize = new Size(P(ClientW - 2 * Pad - 150), 0);
-        _firewall.Location = new Point(P(Pad), P(y + 4));
-        _firewallBtn.SetBounds(P(ClientW - Pad - 138), P(y), P(138), P(28));
+        _firewall.MaximumSize = new Size(P(ClientW - 2 * Pad - 160), 0);
+        _firewall.Location = new Point(P(Pad), P(y + 6));
+        _firewallBtn.SetBounds(P(ClientW - Pad - 138), P(y), P(138), P(32));
         // il testo del firewall va a capo: l'altezza reale (pixel) torna in unità logiche
-        y += Math.Max(44, (int)Math.Round(_firewall.Height / ScaleFactor) + 14);
+        y += Math.Max(48, (int)Math.Round(_firewall.Height / ScaleFactor) + 16);
 
-        _cancel.SetBounds(P(ClientW - Pad - 92), P(y), P(92), P(28));
-        _ok.SetBounds(_cancel.Left - P(100), P(y), P(92), P(28));
-        y += 28 + Pad;
+        y += 10;
+        _cancel.SetBounds(P(ClientW - Pad - 96), P(y), P(96), P(32));
+        _ok.SetBounds(_cancel.Left - P(104), P(y), P(96), P(32));
+        y += 32 + Pad;
 
         ClientSize = new Size(P(ClientW), Math.Max(P(y), _ok.Bottom + P(Pad)));
     }
