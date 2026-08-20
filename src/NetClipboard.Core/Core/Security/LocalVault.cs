@@ -13,15 +13,16 @@ namespace NetClipboard.Core.Security;
 /// profilo — un backup, una cartella sincronizzata, un altro amministratore della
 /// macchina — se li portava via senza toccare l'applicazione.
 ///
-/// La chiave e' casuale, di 32 byte, tenuta in <c>history.key</c> e avvolta da
-/// DPAPI (utente corrente): protegge quanto la chiave di identita', cioe' contro
-/// chi legge i file ma non e' quell'utente su quella macchina. Non protegge da
-/// codice eseguito dall'utente stesso, e non pretende di farlo.
+/// La chiave e' casuale, di 32 byte, tenuta in <c>history.key</c> e avvolta dal
+/// custode del sistema (<see cref="ISecretProtector"/>): protegge quanto la
+/// chiave di identita', cioe' contro chi legge i file ma non e' quell'utente su
+/// quel dispositivo. Non protegge da codice eseguito dall'utente stesso, e non
+/// pretende di farlo.
 ///
-/// Non si applica DPAPI a ogni blob perche' un'immagine da qualche megabyte
-/// passerebbe ogni volta per il servizio di protezione dei dati; AES-GCM con la
-/// chiave gia' in mano costa una frazione, e il formato e' lo stesso gia' usato
-/// sulla rete (<see cref="SessionCipher"/>).
+/// Non si fa passare ogni blob dal custode perche' un'immagine da qualche
+/// megabyte finirebbe ogni volta nel servizio di protezione dei dati; AES-GCM
+/// con la chiave gia' in mano costa una frazione, e il formato e' lo stesso gia'
+/// usato sulla rete (<see cref="SessionCipher"/>).
 /// </summary>
 public sealed class LocalVault
 {
@@ -34,7 +35,8 @@ public sealed class LocalVault
 
     private readonly SessionCipher _cipher;
 
-    public LocalVault(string keyPath) => _cipher = new SessionCipher(LoadOrCreateKey(keyPath));
+    public LocalVault(string keyPath, ISecretProtector protector) =>
+        _cipher = new SessionCipher(LoadOrCreateKey(keyPath, protector));
 
     /// <summary>True se i byte sono un blob di questo forziere (e non un file in chiaro di prima).</summary>
     public static bool IsSealed(byte[] data) =>
@@ -64,14 +66,14 @@ public sealed class LocalVault
 
     // ----- Chiave -----
 
-    private static byte[] LoadOrCreateKey(string path)
+    private static byte[] LoadOrCreateKey(string path, ISecretProtector protector)
     {
         try
         {
             if (File.Exists(path))
             {
-                var key = ProtectedData.Unprotect(File.ReadAllBytes(path), null, DataProtectionScope.CurrentUser);
-                if (key.Length == 32) return key;
+                var key = protector.Unprotect(File.ReadAllBytes(path));
+                if (key is { Length: 32 }) return key;
             }
         }
         catch
@@ -83,7 +85,7 @@ public sealed class LocalVault
         }
 
         var fresh = RandomNumberGenerator.GetBytes(32);
-        try { File.WriteAllBytes(path, ProtectedData.Protect(fresh, null, DataProtectionScope.CurrentUser)); }
+        try { File.WriteAllBytes(path, protector.Protect(fresh)); }
         catch { } // se non si riesce a salvarla, la cronologia di questa sessione resta comunque cifrata
         return fresh;
     }

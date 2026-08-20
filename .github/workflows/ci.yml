@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -6,29 +6,86 @@ on:
   pull_request:
     branches: [main]
 
+# Tre lavori, e ognuno risponde a una domanda diversa:
+#
+#   windows  - l'applicazione Windows sta in piedi? (interfaccia, clipboard, AMSI)
+#   core     - il protocollo si comporta allo stesso modo FUORI da Windows?
+#   android  - il client Android si compila?
+#
+# Il secondo e' il piu' importante da quando c'e' piu' di una piattaforma: il
+# banco di conformita' gira sia qui sia nel lavoro Windows, e se i due dessero
+# byte diversi lo si scoprirebbe subito invece che fra un telefono e un PC.
+
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
+
       - name: Build
-        run: dotnet build src/NetClipboard/NetClipboard.csproj -c Release
+        run: dotnet build NetClipboard.slnx -c Release
 
       # Nessuna stringa utente sta nel codice: qui si verifica che ogni chiave
       # usata da L.T() esista nei cataloghi e che le lingue siano allineate.
+      # Guarda tutto src/, quindi copre anche il client Android.
       - name: Controlla i cataloghi delle lingue
         shell: pwsh
         run: pwsh tools/check-strings.ps1
 
-      # I due banchi escono con codice 1 se un controllo fallisce, quindi fanno da
-      # guardia da soli. Il primo esercita i parser di rete con dati ostili, il
-      # secondo tiene nove istanze del trasporto nello stesso processo e le fa
-      # parlare davvero su loopback: pairing, invii, prelievo di file, revoche.
+      # I banchi escono con codice 1 da soli, quindi fanno da guardia senza altro
+      # contorno. Il primo esercita i parser di rete con dati ostili, il secondo
+      # tiene nove istanze del trasporto nello stesso processo e le fa parlare
+      # davvero su loopback: pairing, invii, prelievo di file, revoche.
       - name: Prove di tenuta
         run: dotnet run --project tools/selftest -c Release
 
       - name: Prova end-to-end fra istanze
         run: dotnet run --project tools/e2e -c Release
+
+      - name: Conformita' del protocollo (Windows)
+        run: dotnet run --project tools/conformance -c Release
+
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Il core non deve dipendere da Windows. Se qualcuno ci infila una
+      # DllImport o un System.Drawing, questo passo e' il punto in cui si vede,
+      # e si vede prima che il client Android smetta di compilare.
+      - name: Build del core (senza Windows)
+        run: dotnet build src/NetClipboard.Core/NetClipboard.Core.csproj -c Release
+
+      # Gli stessi valori attesi del lavoro Windows. Coincidono su due sistemi
+      # diversi, quindi coincideranno anche su un telefono.
+      - name: Conformita' del protocollo (Linux)
+        run: dotnet run --project tools/conformance -c Release
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Installa il carico di lavoro Android
+        run: dotnet workload install android --skip-sign-check
+
+      # Debug e non Release: qui interessa che il codice compili e che le
+      # risorse Android siano coerenti, non produrre un pacchetto. Il pacchetto
+      # firmato lo fa il rilascio, che e' l'unico posto dove ci sono le chiavi.
+      - name: Build del client Android
+        run: dotnet build src/NetClipboard.Android/NetClipboard.Android.csproj -c Debug

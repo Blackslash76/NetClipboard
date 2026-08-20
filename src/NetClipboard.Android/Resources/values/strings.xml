@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Qui sta SOLO cio' che deve leggere il sistema operativo prima che
+     l'applicazione parta: il nome sotto l'icona. Tutti i testi
+     dell'applicazione stanno nel catalogo del core (Resources/it.json) e si
+     prendono con L.T(), perche' siano gli stessi su Windows e su Android e si
+     traducano una volta sola. -->
+<resources>
+  <string name="app_name">NetClipboard</string>
+</resources>

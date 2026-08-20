@@ -1,4 +1,4 @@
-// Prove di tenuta sui punti dove un errore costa caro: i parser che leggono dati
+﻿// Prove di tenuta sui punti dove un errore costa caro: i parser che leggono dati
 // dalla rete e il controllo di identita' del canale locale.
 //
 // Non serve una seconda macchina: si esercita il codice vero dell'applicazione con
@@ -9,6 +9,7 @@
 using System.Text;
 using NetClipboard.Core;
 using NetClipboard.Core.Security;
+using NetClipboard.Platform;
 
 var ok = 0; var ko = 0;
 void Check(string what, bool passed, string detail = "")
@@ -87,7 +88,7 @@ Console.WriteLine("== cronologia cifrata a riposo ==");
 {
     var dir = Path.Combine(Path.GetTempPath(), "netclip-vault-" + Guid.NewGuid().ToString("N")[..8]);
     Directory.CreateDirectory(dir);
-    var vault = new LocalVault(Path.Combine(dir, "history.key"));
+    var vault = new LocalVault(Path.Combine(dir, "history.key"), WindowsSecretProtector.Instance);
 
     var secret = Encoding.UTF8.GetBytes("password: non deve stare in chiaro su disco");
     var sealedBytes = vault.Seal(secret);
@@ -95,7 +96,7 @@ Console.WriteLine("== cronologia cifrata a riposo ==");
         !Convert.ToHexString(sealedBytes).Contains(Convert.ToHexString(secret)));
     Check("blob riaperto identico", vault.Open(sealedBytes)!.SequenceEqual(secret));
     Check("la stessa chiave si ritrova dopo un riavvio",
-        new LocalVault(Path.Combine(dir, "history.key")).Open(sealedBytes)!.SequenceEqual(secret));
+        new LocalVault(Path.Combine(dir, "history.key"), WindowsSecretProtector.Instance).Open(sealedBytes)!.SequenceEqual(secret));
 
     // File di una versione precedente: niente firma, si rileggono com'erano.
     Check("file in chiaro di prima: ancora leggibile", vault.Open(secret)!.SequenceEqual(secret));

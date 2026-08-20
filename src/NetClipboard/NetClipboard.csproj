@@ -1,14 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- L'applicazione Windows: interfaccia WinForms, clipboard, AMSI, firewall,
+       "Invia a", aggiornamento. Il protocollo NON sta qui: sta in
+       NetClipboard.Core, ed e' lo stesso codice che esegue Android. -->
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <RootNamespace>NetClipboard</RootNamespace>
     <AssemblyName>NetClipboard</AssemblyName>
-    <Version>3.0.1</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Product>NetClipboard</Product>
     <Description>Clipboard condivisa peer-to-peer sulla LAN</Description>
@@ -16,22 +17,17 @@
 
     <!-- Metadati completi nella risorsa di versione dell'eseguibile. Un binario
          non firmato e privo di dati sull'autore e' uno dei segnali che fanno
-         alzare il punteggio alle euristiche antivirus al momento del download. -->
-    <Company>Francesco Papeo</Company>
-    <Authors>Francesco Papeo</Authors>
-    <Copyright>Copyright (c) 2026 Francesco Papeo</Copyright>
+         alzare il punteggio alle euristiche antivirus al momento del download.
+         Il resto (azienda, autore, copyright) sta in Directory.Build.props. -->
     <AssemblyTitle>NetClipboard</AssemblyTitle>
-    <NeutralLanguage>it-IT</NeutralLanguage>
-    <PackageProjectUrl>https://github.com/Blackslash76/NetClipboard</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/Blackslash76/NetClipboard</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="appicon.ico" />
-    <!-- Cataloghi delle lingue: incorporati nell'exe (niente assembly satellite,
-         che complicherebbero il publish single-file). Aggiungere una lingua =
-         aggiungere Resources/xx.json, senza toccare il csproj. -->
-    <EmbeddedResource Include="Resources\*.json" LogicalName="NetClipboard.Resources.%(Filename).json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetClipboard.Core\NetClipboard.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

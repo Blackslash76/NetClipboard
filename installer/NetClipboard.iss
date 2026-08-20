@@ -1,4 +1,4 @@
-; Installer classico Windows per NetClipboard (Inno Setup 6).
+﻿; Installer classico Windows per NetClipboard (Inno Setup 6).
 ;
 ; Installazione PER MACCHINA in C:\Program Files\NetClipboard (in italiano Esplora
 ; risorse la mostra come "Programmi": il percorso vero e' quello inglese). Serve
@@ -17,7 +17,7 @@
   #define MyAppVersion "1.0.0"
 #endif
 #ifndef SourceExe
-  #define SourceExe "..\src\NetClipboard\bin\Release\net9.0-windows\win-x64\publish\NetClipboard.exe"
+  #define SourceExe "..\src\NetClipboard\bin\Release\net10.0-windows\win-x64\publish\NetClipboard.exe"
 #endif
 
 [Setup]

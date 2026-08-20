@@ -17,7 +17,19 @@ public sealed class AppConfig
     /// nome che non corrisponde a nessun computer della rete; per chiamare gli
     /// altri come si vuole c'e' <see cref="DeviceLabels"/>, che resta locale.
     /// </summary>
-    public string DisplayName { get; set; } = Environment.MachineName;
+    public string DisplayName { get; set; } = DeviceName();
+
+    /// <summary>
+    /// Come si chiama questo dispositivo. Su Windows e' il nome del computer; su
+    /// Android <c>Environment.MachineName</c> risponde "localhost" a tutti, che
+    /// in un elenco di dispositivi non distingue niente, quindi la piattaforma
+    /// sostituisce questa funzione con marca e modello.
+    ///
+    /// E' una funzione e non un valore perche' viene riletta a ogni caricamento
+    /// della configurazione: il nome del dispositivo non e' una preferenza
+    /// salvata, e un nome inventato da una versione precedente deve sparire.
+    /// </summary>
+    public static Func<string> DeviceName { get; set; } = () => Environment.MachineName;
 
     /// <summary>
     /// Etichette scelte da noi per gli altri dispositivi (DeviceId -> nome).
@@ -105,10 +117,27 @@ public sealed class AppConfig
     [JsonIgnore]
     public string StateDir { get; set; } = AppDataDir;
 
+    private static string? _appDataRoot;
+
+    /// <summary>
+    /// Impone la cartella dei dati dell'applicazione. Serve alle piattaforme che
+    /// non hanno un %AppData%: su Android ogni applicazione ha una cartella
+    /// privata il cui percorso lo conosce solo il sistema, e glielo si passa qui.
+    ///
+    /// Va chiamata PRIMA di costruire qualunque <see cref="AppConfig"/>: la
+    /// cartella di stato viene fissata alla costruzione (<see cref="StateDir"/>).
+    /// </summary>
+    public static void UseAppDataDir(string path)
+    {
+        Directory.CreateDirectory(path);
+        _appDataRoot = path;
+    }
+
     public static string AppDataDir
     {
         get
         {
+            if (_appDataRoot != null) return _appDataRoot;
             var dir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "NetClipboard");
@@ -140,7 +169,7 @@ public sealed class AppConfig
                 {
                     // Il nome proprio non si sceglie piu': se in un config vecchio
                     // c'era un nome inventato, torna quello della macchina.
-                    cfg.DisplayName = Environment.MachineName;
+                    cfg.DisplayName = DeviceName();
                     return cfg;
                 }
             }

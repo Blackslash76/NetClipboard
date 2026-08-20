@@ -19,7 +19,7 @@ public sealed class SasDialog : ScaledForm
 
     private readonly Label _title = new();
     private readonly Label _peer;
-    private readonly Label _code;
+    private readonly CodeLine _code;
     private readonly Label _warn = new() { TextAlign = ContentAlignment.MiddleCenter };
     private readonly Button _ok = new() { DialogResult = DialogResult.OK };
     private readonly Button _cancel = new() { DialogResult = DialogResult.Cancel };
@@ -43,10 +43,9 @@ public sealed class SasDialog : ScaledForm
         {
             Text = L.T("sas.peerLine", prompt.PeerName, prompt.Fingerprint),
         };
-        _code = new Label
+        _code = new CodeLine
         {
             Text = string.Join("  ", prompt.Sas.ToCharArray()),
-            TextAlign = ContentAlignment.MiddleCenter,
         };
 
         foreach (var b in new[] { _ok, _cancel })
@@ -101,16 +100,10 @@ public sealed class SasDialog : ScaledForm
         var full = ClientW - 2 * Pad;
         var y = 18;
 
-        // il codice deve starci TUTTO: riduce il corpo finché non entra nella riga
-        var px = 40f;
-        while (px > 20f)
-        {
-            using var probe = new Font("Consolas", px * ScaleFactor, FontStyle.Bold, GraphicsUnit.Pixel);
-            if (TextRenderer.MeasureText(_code.Text, probe).Width <= P(full - 8))
-                break;
-            px -= 2f;
-        }
-        _code.Font = PxFont("Consolas", px, FontStyle.Bold);
+        // Al codice si dicono solo gli estremi: il corpo giusto lo sceglie da sé
+        // mentre disegna, dove è l'unico posto in cui la misura non può mentire.
+        _code.MaxPx = P(40);
+        _code.MinPx = P(18);
 
         _title.SetBounds(P(Pad), P(y), P(full), P(26)); y += 32;
         _peer.SetBounds(P(Pad), P(y), P(full), P(42)); y += 50;
@@ -128,5 +121,77 @@ public sealed class SasDialog : ScaledForm
     {
         _timer.Dispose();
         base.OnFormClosed(e);
+    }
+
+    /// <summary>
+    /// La riga con le sei cifre. Sceglie il corpo del carattere <b>mentre
+    /// disegna</b>, misurandolo sul contesto grafico su cui sta disegnando.
+    ///
+    /// Prima il corpo veniva scelto durante il layout, misurando con
+    /// <c>TextRenderer.MeasureText(testo, font)</c> — che misura su un contesto
+    /// suo, non su quello del monitor dove la finestra finirà. Con due schermi a
+    /// scalatura diversa (qui 150% e 200%) le due cose non coincidono: il testo
+    /// veniva misurato per un DPI e disegnato per un altro, più grande di un
+    /// terzo, e usciva dalla riga. Chi guardava vedeva <b>quattro cifre su sei</b>
+    /// e non aveva modo di accorgersi che ne mancavano due — su un codice che
+    /// serve proprio a essere confrontato, è il difetto peggiore possibile.
+    /// Trascinare la finestra sull'altro monitor rifaceva il layout e sistemava
+    /// tutto, il che rendeva il difetto anche difficile da cogliere.
+    ///
+    /// Misurare nel momento del disegno toglie il problema alla radice, invece di
+    /// compensarlo con un margine indovinato: il contesto su cui si misura è per
+    /// costruzione quello su cui si disegna.
+    /// </summary>
+    private sealed class CodeLine : Control
+    {
+        // Campi e non proprietà: l'analizzatore WFO1000 rifiuta le proprietà
+        // pubbliche non serializzabili su un Control.
+        public int MaxPx = 40;
+        public int MinPx = 18;
+
+        public CodeLine()
+        {
+            // Owner-drawn e a doppio buffer: un ridisegno a ogni secondo (c'è un
+            // conto alla rovescia accanto) non deve far sfarfallare il codice.
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque, true);
+            ResizeRedraw = true;
+            TabStop = false;
+        }
+
+        protected override void OnTextChanged(EventArgs e)
+        {
+            base.OnTextChanged(e);
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(BackColor);
+            if (string.IsNullOrEmpty(Text))
+                return;
+
+            const TextFormatFlags flags = TextFormatFlags.HorizontalCenter |
+                                          TextFormatFlags.VerticalCenter |
+                                          TextFormatFlags.SingleLine |
+                                          TextFormatFlags.NoPadding;
+
+            var box = ClientRectangle;
+            for (var px = MaxPx; px > MinPx; px -= 2)
+            {
+                using var probe = new Font("Consolas", px, FontStyle.Bold, GraphicsUnit.Pixel);
+                var size = TextRenderer.MeasureText(e.Graphics, Text, probe);
+                if (size.Width <= box.Width && size.Height <= box.Height)
+                {
+                    TextRenderer.DrawText(e.Graphics, Text, probe, box, ForeColor, flags);
+                    return;
+                }
+            }
+
+            // Nemmeno il corpo minimo ci sta: si disegna comunque piccolo. Un
+            // codice minuscolo si legge, un codice tagliato inganna.
+            using var smallest = new Font("Consolas", MinPx, FontStyle.Bold, GraphicsUnit.Pixel);
+            TextRenderer.DrawText(e.Graphics, Text, smallest, box, ForeColor, flags);
+        }
     }
 }

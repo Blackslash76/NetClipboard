@@ -1,4 +1,4 @@
-// Banco di prova end-to-end: il codice di rete eseguito davvero, non solo letto.
+﻿// Banco di prova end-to-end: il codice di rete eseguito davvero, non solo letto.
 //
 // Fino alla 2.7 tutto il trasporto era stato verificato per costruzione e mai
 // messo in moto: handshake, pairing, invio a un non accoppiato, prelievo dei file,
@@ -51,15 +51,18 @@ var all = new[] { A, B, C, D, E, R, F, G, H };
 // ciascuno resta annotato, cosi' si puo' confrontare fra i due lati.
 var sas = new Dictionary<string, string>();
 var pairAnswer = all.ToDictionary(n => n.Name, _ => true);
-foreach (var n in all)
+void UseStandardConfirm(Node me)
 {
-    var me = n;
-    me.Transport.PairingConfirm = p =>
+    me.Transport.PairingConfirm = (p, peerGaveUp) =>
     {
         lock (sas) sas[me.Name] = p.Sas;
+        // Se l'altro ha gia' annullato, la domanda non si mostra nemmeno: e'
+        // cio' che deve fare un'interfaccia vera davanti a quel token.
+        if (peerGaveUp.IsCancellationRequested) return false;
         return pairAnswer[me.Name];
     };
 }
+foreach (var n in all) UseStandardConfirm(n);
 
 static async Task<bool> Until(Func<bool> cond, int timeoutMs = 5000)
 {
@@ -84,10 +87,25 @@ Check("B ha pinnato la chiave di A", B.Trust.Matches(A.DeviceId, A.Identity.Publ
 // Un no da una delle due parti non concede niente a nessuno: la fiducia e' un
 // atto a due, e mezzo consenso non basta.
 pairAnswer["D"] = false;
+
+// E l'annullamento di uno deve chiudere la domanda dell'altro. Qui A tiene la
+// propria domanda aperta e aspetta il token: se D dicendo no non lo annullasse,
+// su A resterebbe a schermo una finestra che chiede di confrontare un codice
+// che dall'altra parte non esiste piu'.
+var aSawPeerGiveUp = false;
+A.Transport.PairingConfirm = (p, peerGaveUp) =>
+{
+    lock (sas) sas["A"] = p.Sas;
+    aSawPeerGiveUp = peerGaveUp.WaitHandle.WaitOne(3000);
+    return false;
+};
+
 var pairAD = await A.PairAsync(D);
 pairAnswer["D"] = true;
+UseStandardConfirm(A);
 Check("pairing rifiutato da D: nessuna fiducia", pairAD.Outcome == PairOutcome.Rejected
         && !A.Trust.IsTrusted(D.DeviceId) && !D.Trust.IsTrusted(A.DeviceId), pairAD.Outcome.ToString());
+Check("il no di D chiude la domanda rimasta aperta su A", aSawPeerGiveUp);
 
 Console.WriteLine();
 Console.WriteLine("== testo fra dispositivi fidati ==");

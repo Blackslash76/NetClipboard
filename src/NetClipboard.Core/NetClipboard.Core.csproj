@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Il cuore di NetClipboard: protocollo, crittografia, fiducia, cronologia e
+       catalogo dei testi. Non contiene NIENTE di specifico a un sistema
+       operativo, e non deve contenerlo mai: e' il codice che Windows, Android e
+       (in futuro) Linux e macOS eseguono IDENTICO.
+
+       E' la ragione per cui il client Android non riscrive il protocollo. Due
+       implementazioni dello stesso filo divergono sempre, e a divergere sarebbe
+       proprio la parte che non si puo' sbagliare.
+
+       Cio' che il sistema deve fornire passa da interfacce dichiarate qui:
+       ISecretProtector (dove si custodisce una chiave) e IContentScanner (chi
+       giudica un contenuto in arrivo). Chi ospita il core le implementa. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>NetClipboard</RootNamespace>
+    <AssemblyName>NetClipboard.Core</AssemblyName>
+    <Product>NetClipboard</Product>
+    <Description>Protocollo e nucleo condiviso di NetClipboard</Description>
+
+    <!-- Un avviso qui e' un errore altrove: questo assembly viene compilato
+         anche per Android, dove un'API non disponibile non si scopre a runtime
+         se non nel momento peggiore. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Cataloghi delle lingue: incorporati QUI, non nelle applicazioni, cosi'
+         una traduzione aggiunta vale per tutte le piattaforme insieme.
+         Aggiungere una lingua = aggiungere Resources/xx.json. -->
+    <EmbeddedResource Include="Resources\*.json" LogicalName="NetClipboard.Resources.%(Filename).json" />
+  </ItemGroup>
+
+</Project>

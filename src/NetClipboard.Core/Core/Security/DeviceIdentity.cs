@@ -5,10 +5,13 @@ namespace NetClipboard.Core.Security;
 
 /// <summary>
 /// Identità crittografica del dispositivo: una coppia di chiavi ECDSA P-256.
-/// La chiave privata non lascia mai il PC (protetta con DPAPI). L'ID dispositivo
-/// è l'impronta (SHA-256) della chiave pubblica: non falsificabile.
+/// La chiave privata non lascia mai il dispositivo (la custodisce il sistema,
+/// tramite <see cref="ISecretProtector"/>). L'ID dispositivo è l'impronta
+/// (SHA-256) della chiave pubblica: non falsificabile.
 ///
-/// Usa solo API del framework .NET, nessuna dipendenza esterna.
+/// Usa solo API del framework .NET, nessuna dipendenza esterna: e' lo stesso
+/// codice su Windows e su Android, e le due parti si riconoscono proprio perche'
+/// firmano e verificano con lo stesso identico algoritmo.
 /// </summary>
 public sealed class DeviceIdentity : IDisposable
 {
@@ -30,19 +33,39 @@ public sealed class DeviceIdentity : IDisposable
     public static DeviceIdentity CreateEphemeral() =>
         new(ECDsa.Create(ECCurve.NamedCurves.nistP256));
 
-    /// <summary>Carica l'identità dal disco o la crea al primo avvio.</summary>
-    public static DeviceIdentity LoadOrCreate()
+    /// <summary>
+    /// Identita' da una chiave privata gia' in mano (PKCS#8). Serve al banco di
+    /// conformita', che con chiavi fissate ottiene impronte e firme riproducibili,
+    /// e alle piattaforme che custodiscono la chiave a modo loro invece che in un
+    /// file avvolto da <see cref="ISecretProtector"/>.
+    /// </summary>
+    public static DeviceIdentity FromPkcs8(byte[] pkcs8)
     {
-        var path = Path.Combine(AppConfig.AppDataDir, "identity.key");
+        var key = ECDsa.Create();
+        key.ImportPkcs8PrivateKey(pkcs8, out _);
+        return new DeviceIdentity(key);
+    }
+
+    /// <summary>
+    /// Carica l'identità dal disco o la crea al primo avvio, affidando la chiave
+    /// privata al custode del sistema ospite.
+    /// </summary>
+    /// <param name="protector">Chi avvolge la chiave privata: DPAPI su Windows, il portachiavi su Android.</param>
+    /// <param name="path">Dove sta il file; per default <c>identity.key</c> nella cartella dell'applicazione.</param>
+    public static DeviceIdentity LoadOrCreate(ISecretProtector protector, string? path = null)
+    {
+        path ??= Path.Combine(AppConfig.AppDataDir, "identity.key");
         try
         {
             if (File.Exists(path))
             {
-                var prot = File.ReadAllBytes(path);
-                var pkcs8 = ProtectedData.Unprotect(prot, null, DataProtectionScope.CurrentUser);
-                var key = ECDsa.Create();
-                key.ImportPkcs8PrivateKey(pkcs8, out _);
-                return new DeviceIdentity(key);
+                var pkcs8 = protector.Unprotect(File.ReadAllBytes(path));
+                if (pkcs8 != null)
+                {
+                    var key = ECDsa.Create();
+                    key.ImportPkcs8PrivateKey(pkcs8, out _);
+                    return new DeviceIdentity(key);
+                }
             }
         }
         catch
@@ -53,9 +76,7 @@ public sealed class DeviceIdentity : IDisposable
         var created = ECDsa.Create(ECCurve.NamedCurves.nistP256);
         try
         {
-            var pkcs8 = created.ExportPkcs8PrivateKey();
-            var prot = ProtectedData.Protect(pkcs8, null, DataProtectionScope.CurrentUser);
-            File.WriteAllBytes(path, prot);
+            File.WriteAllBytes(path, protector.Protect(created.ExportPkcs8PrivateKey()));
         }
         catch
         {

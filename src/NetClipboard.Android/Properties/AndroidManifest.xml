@@ -1,0 +1,31 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+  <!-- Senza questo permesso il sistema scarta i pacchetti di broadcast prima che
+       arrivino all'applicazione: si annuncerebbe agli altri senza sentire mai
+       nessuno. E' anche il permesso che qualifica il servizio come
+       "connectedDevice" (vedi NetClipboardService). -->
+  <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+  <!-- android:allowBackup="false" non e' una noia burocratica: con il backup
+       automatico acceso, Android copierebbe la cartella dell'applicazione su
+       Google Drive, e li' dentro ci sono la chiave privata del dispositivo e
+       l'elenco dei fidati. Una chiave che finisce in un backup di rete non e'
+       piu' la chiave di UN dispositivo. -->
+  <application
+      android:label="@string/app_name"
+      android:allowBackup="false"
+      android:fullBackupContent="false"
+      android:dataExtractionRules="@xml/data_extraction_rules"
+      android:supportsRtl="true" />
+
+</manifest>

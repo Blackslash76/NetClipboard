@@ -1,0 +1,31 @@
+﻿<Project>
+
+  <!-- Proprieta' comuni a tutti i progetti del repository.
+
+       La VERSIONE sta qui e in nessun altro posto: da un unico numero derivano
+       l'eseguibile Windows, il manifest dell'aggiornamento e il versionCode
+       dell'APK Android. Averla in due file significa, prima o poi, pubblicare
+       una release in cui i due non coincidono.
+
+       La pipeline la sovrascrive con -p:Version=<numero dal tag>: qui resta il
+       valore usato per le compilazioni locali. -->
+  <PropertyGroup>
+    <Version>3.1.0</Version>
+
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Un numero solo per tutti i pacchetti Avalonia: mescolarne due versioni
+         diverse da' errori di caricamento che sembrano tutt'altro. -->
+    <AvaloniaVersion>12.1.1</AvaloniaVersion>
+
+    <Company>Francesco Papeo</Company>
+    <Authors>Francesco Papeo</Authors>
+    <Copyright>Copyright (c) 2026 Francesco Papeo</Copyright>
+    <NeutralLanguage>it-IT</NeutralLanguage>
+    <PackageProjectUrl>https://github.com/Blackslash76/NetClipboard</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Blackslash76/NetClipboard</RepositoryUrl>
+  </PropertyGroup>
+
+</Project>

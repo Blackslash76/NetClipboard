@@ -36,9 +36,25 @@ public sealed class Handshaker : IDisposable
     public byte[] EphPublicKey { get; }
 
     public Handshaker(DeviceIdentity self)
+        : this(self, ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256))
+    {
+    }
+
+    /// <summary>
+    /// Con la chiave effimera fornita da fuori. Serve al banco di conformita':
+    /// fissando le quattro chiavi, il transcript, la chiave di sessione e il SAS
+    /// diventano numeri riproducibili, e si possono confrontare con quelli attesi
+    /// — che e' l'unico modo di accorgersi che un'implementazione ha smesso di
+    /// derivarli come le altre.
+    ///
+    /// In esercizio si usa sempre il costruttore ordinario, che ne genera una
+    /// nuova a ogni connessione: e' li' che sta la forward secrecy, e passarne
+    /// una riusata la annullerebbe.
+    /// </summary>
+    public Handshaker(DeviceIdentity self, ECDiffieHellman ephemeral)
     {
         _self = self;
-        _eph = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        _eph = ephemeral;
         EphPublicKey = _eph.ExportSubjectPublicKeyInfo();
     }
 

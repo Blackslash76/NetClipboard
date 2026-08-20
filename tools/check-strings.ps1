@@ -19,13 +19,18 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $SourceDir = (Join-Path $PSScriptRoot '..\src\NetClipboard'),
+    # Tutto src/: le chiavi si usano nell'applicazione Windows, nel core condiviso
+    # e nel client Android, e un catalogo va verificato contro tutti e tre insieme.
+    [string] $SourceDir = (Join-Path $PSScriptRoot '..\src'),
+    # I cataloghi stanno nel core: una traduzione aggiunta vale per tutte le
+    # piattaforme, non per una sola.
+    [string] $ResourcesDir = (Join-Path $PSScriptRoot '..\src\NetClipboard.Core\Resources'),
     [string] $ReferenceLanguage = 'it'
 )
 
 $ErrorActionPreference = 'Stop'
 $SourceDir = (Resolve-Path $SourceDir).Path
-$resourcesDir = Join-Path $SourceDir 'Resources'
+$resourcesDir = (Resolve-Path $ResourcesDir).Path
 $problems = 0
 
 function Read-Catalog([string] $path) {

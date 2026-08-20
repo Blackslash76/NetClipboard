@@ -1,4 +1,4 @@
-name: Release (gold)
+﻿name: Release (gold)
 
 # Pubblica una nuova "gold": al push di un tag vX.Y.Z costruisce il single-file,
 # lo firma con Authenticode (SignPath Foundation), lo FIRMA con la chiave privata
@@ -45,7 +45,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Versione dal tag
         id: ver
@@ -230,3 +230,111 @@ jobs:
             manifest.json
           make_latest: true
           generate_release_notes: true
+
+  # ---------------------------------------------------------------- Android ---
+  #
+  # Gira DOPO 'gold', non insieme: la release la crea quel lavoro, e questo le
+  # aggiunge l'APK. Se fallisse, la release Windows resta valida e pubblicata —
+  # che e' cio' che si vuole, visto che sono due prodotti con vite proprie.
+  #
+  # LA CHIAVE DI FIRMA E' PER SEMPRE. Android riconosce un aggiornamento solo se
+  # e' firmato con la stessa chiave della versione installata: perderla, o
+  # firmarne una con un'altra, significa che nessuno potra' aggiornare — dovranno
+  # disinstallare e reinstallare, perdendo i dispositivi accoppiati. Il file .jks
+  # va conservato fuori da qui, in piu' di una copia.
+  android:
+    needs: gold
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_CONFIGURED: ${{ secrets.ANDROID_KEYSTORE_B64 != '' }}
+      PLAY_CONFIGURED: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Installa il carico di lavoro Android
+        run: dotnet workload install android --skip-sign-check
+
+      - name: Versione dal tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Avviso se manca la chiave di firma
+        if: env.KEYSTORE_CONFIGURED != 'true'
+        run: |
+          echo "::warning::ANDROID_KEYSTORE_B64 non configurato: nessun APK pubblicato."
+          echo "Servono i secret ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD."
+
+      - name: Ricostruisci il portachiavi
+        if: env.KEYSTORE_CONFIGURED == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/netclipboard.jks"
+          test -s "$RUNNER_TEMP/netclipboard.jks"
+
+      # Una sola compilazione produce sia l'APK sia l'AAB: cosi' cio' che si
+      # scarica da qui e cio' che finisce su Play non possono divergere.
+      - name: Costruisci APK e AAB firmati
+        if: env.KEYSTORE_CONFIGURED == 'true'
+        run: |
+          dotnet publish src/NetClipboard.Android/NetClipboard.Android.csproj -c Release \
+            -p:Version=${{ steps.ver.outputs.version }} \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$RUNNER_TEMP/netclipboard.jks" \
+            -p:AndroidSigningStorePass='${{ secrets.ANDROID_KEYSTORE_PASSWORD }}' \
+            -p:AndroidSigningKeyAlias='${{ secrets.ANDROID_KEY_ALIAS }}' \
+            -p:AndroidSigningKeyPass='${{ secrets.ANDROID_KEY_PASSWORD }}'
+
+      - name: Raccogli i pacchetti
+        if: env.KEYSTORE_CONFIGURED == 'true'
+        id: pack
+        run: |
+          out=src/NetClipboard.Android/bin/Release/net10.0-android36.0/publish
+          mkdir -p dist
+          # Si prendono ESPLICITAMENTE i file firmati: accanto ce ne sono di non
+          # firmati con nome quasi uguale, e un APK non firmato non si installa.
+          apk=$(find "$out" -name '*-Signed.apk' | head -1)
+          aab=$(find "$out" -name '*-Signed.aab' | head -1)
+          test -n "$apk" || { echo "APK firmato non prodotto"; exit 1; }
+          test -n "$aab" || { echo "AAB firmato non prodotto"; exit 1; }
+          cp "$apk" "dist/NetClipboard-${{ steps.ver.outputs.version }}.apk"
+          cp "$aab" "dist/NetClipboard-${{ steps.ver.outputs.version }}.aab"
+          echo "aab=dist/NetClipboard-${{ steps.ver.outputs.version }}.aab" >> "$GITHUB_OUTPUT"
+          ls -la dist
+
+      # L'APK si aggiunge alla release gia' creata da 'gold': stesso tag, stessa
+      # pagina. L'AAB no — su Play si carica, e un AAB scaricato a mano non si
+      # installa: pubblicarlo accanto all'APK inviterebbe solo a sbagliare file.
+      - name: Aggiungi l'APK alla release
+        if: env.KEYSTORE_CONFIGURED == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/NetClipboard-*.apk
+
+      - name: Conserva l'AAB come artefatto
+        if: env.KEYSTORE_CONFIGURED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: netclipboard-aab
+          path: dist/*.aab
+          if-no-files-found: error
+
+      # Canale interno, non produzione: da li' si promuove a mano dopo aver
+      # provato il pacchetto davvero pubblicato, che non e' mai identico a
+      # quello provato in casa.
+      - name: Carica su Google Play (canale interno)
+        if: env.KEYSTORE_CONFIGURED == 'true' && env.PLAY_CONFIGURED == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: it.eulogic.netclipboard
+          releaseFiles: ${{ steps.pack.outputs.aab }}
+          track: internal
+          status: completed

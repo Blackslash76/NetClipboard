@@ -104,10 +104,10 @@ public sealed class ClipboardHistory
 
     public event Action? Changed;
 
-    public ClipboardHistory(AppConfig config)
+    public ClipboardHistory(AppConfig config, ISecretProtector protector)
     {
         _config = config;
-        _vault = new LocalVault(Path.Combine(config.StateDir, "history.key"));
+        _vault = new LocalVault(Path.Combine(config.StateDir, "history.key"), protector);
         Load();
     }
 

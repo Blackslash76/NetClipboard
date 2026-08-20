@@ -1,0 +1,79 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Il client Android. Del protocollo qui non c'e' niente: sta in
+       NetClipboard.Core ed e' lo stesso identico codice che gira su Windows.
+       Qui c'e' solo cio' che Android fa a modo suo — il portachiavi, il servizio
+       in primo piano, i lucchetti del Wi-Fi, la clipboard di sistema. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android36.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>NetClipboard.Droid</RootNamespace>
+    <AssemblyName>NetClipboard.Android</AssemblyName>
+
+    <!-- Android 8: sotto non ci sono i canali di notifica, e senza quelli un
+         servizio in primo piano non si puo' nemmeno mostrare. -->
+    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+
+    <!-- L'identificativo del pacchetto. NON e' modificabile dopo la prima
+         pubblicazione su Play: cambiarlo significa un'altra applicazione, con
+         un'altra pagina e senza gli aggiornamenti di chi ha gia' installato. -->
+    <ApplicationId>it.eulogic.netclipboard</ApplicationId>
+
+    <ApplicationDisplayVersion>$(Version)</ApplicationDisplayVersion>
+  </PropertyGroup>
+
+  <!-- versionCode da <Version>: 3.0.1 -> 30001.
+
+       Deve crescere a ogni pubblicazione e Play rifiuta un caricamento che non
+       cresce, quindi non puo' essere un numero scritto a mano da qualche parte:
+       si ricava dall'unico posto dove la versione esiste (Directory.Build.props,
+       o il tag quando compila la pipeline). Regge finche' minore e patch stanno
+       sotto 100, che e' molto piu' di quanto questo progetto abbia mai usato. -->
+  <PropertyGroup>
+    <_VerMajor>$([System.Version]::Parse('$(Version)').Major)</_VerMajor>
+    <_VerMinor>$([System.Version]::Parse('$(Version)').Minor)</_VerMinor>
+    <_VerPatch>$([System.Version]::Parse('$(Version)').Build)</_VerPatch>
+    <ApplicationVersion>$([MSBuild]::Add($([MSBuild]::Add($([MSBuild]::Multiply($(_VerMajor), 10000)), $([MSBuild]::Multiply($(_VerMinor), 100)))), $(_VerPatch)))</ApplicationVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- APK per chi lo scarica dalla release, AAB per Play: la stessa
+         compilazione produce entrambi, cosi' non possono divergere. -->
+    <AndroidPackageFormats>apk;aab</AndroidPackageFormats>
+
+    <!-- Le due architetture dei telefoni veri, dichiarate invece che lasciate al
+         valore predefinito: oggi coincidono, ma quale sia il predefinito lo
+         decide l'SDK e puo' cambiare da una versione all'altra. In Debug restano
+         tutte, cosi' l'emulatore x86 continua a funzionare. -->
+    <RuntimeIdentifiers>android-arm64;android-arm</RuntimeIdentifiers>
+
+    <!-- Qui NON c'e' <AndroidLinkMode>None</AndroidLinkMode>, e non e' una
+         dimenticanza.
+
+         C'era, messo per prudenza: la configurazione e la fiducia si leggono con
+         System.Text.Json per riflessione, ed e' il genere di codice che un
+         collegamento aggressivo rompe in silenzio. La prudenza si e' rivelata il
+         problema: con quella riga il pacchetto Release moriva all'avvio su un
+         telefono vero, con un'asserzione del runtime Mono
+         (`klass->instance_size == instance_size`), mentre il Debug funzionava.
+         Il Debug pero' non impacchetta le assembly nello stesso modo — le spinge
+         il tooling invece di metterle nell'APK — quindi non lo avrebbe mai
+         mostrato.
+
+         Vale oltre questa riga: un'impostazione messa "per sicurezza" va provata
+         come tutte le altre, e va provato l'ARTEFATTO CHE SI SPEDISCE. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Android" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="$(AvaloniaVersion)" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="$(AvaloniaVersion)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetClipboard.Core\NetClipboard.Core.csproj" />
+  </ItemGroup>
+
+</Project>

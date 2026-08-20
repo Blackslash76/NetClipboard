@@ -1,5 +1,11 @@
 <Solution>
+  <!-- Qui stanno i progetti che si compilano su una macchina Windows appena
+       installata: il core condiviso e l'applicazione. Il client Android
+       (src/NetClipboard.Android) e' fuori di proposito, perche' senza il carico
+       di lavoro `android` non si compila e romperebbe la solution a chiunque non
+       lo abbia. Si costruisce per conto suo, come gli strumenti in tools/. -->
   <Folder Name="/src/">
+    <Project Path="src/NetClipboard.Core/NetClipboard.Core.csproj" />
     <Project Path="src/NetClipboard/NetClipboard.csproj" />
   </Folder>
 </Solution>

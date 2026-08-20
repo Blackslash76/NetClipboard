@@ -1,4 +1,4 @@
-# Segreti — MAI condividere / committare
+﻿# Segreti — MAI condividere / committare
 .vault/
 *.key
 *.pfx
@@ -19,3 +19,7 @@ manifest.json
 # IDE
 .vs/
 .idea/
+
+# Passaggio di consegne: NON versionato di proposito. Parla della macchina di
+# prova e dell'antivirus in uso, e questo repository e' pubblico.
+HANDOFF.md

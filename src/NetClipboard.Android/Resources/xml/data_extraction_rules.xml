@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 e successivi guardano qui invece che ad allowBackup. Si esclude
+     tutto, in entrambi i modi: niente backup su cloud e niente trasferimento a
+     un nuovo telefono. La chiave privata del dispositivo e l'elenco dei fidati
+     non devono uscire da questo apparecchio; su un telefono nuovo si accoppia da
+     capo, che e' l'unico modo in cui la fiducia significhi ancora qualcosa. -->
+<data-extraction-rules>
+  <cloud-backup>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+  </cloud-backup>
+  <device-transfer>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+  </device-transfer>
+</data-extraction-rules>

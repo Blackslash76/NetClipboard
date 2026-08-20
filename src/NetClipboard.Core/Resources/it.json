@@ -209,5 +209,24 @@
   "unit.tb": "TB",
 
   "error.notTrusted": "Dispositivo non trusted o handshake fallito.",
-  "error.offerGone": "Offerta non più disponibile."
+  "error.offerGone": "Offerta non più disponibile.",
+
+  "mobile.channelName": "NetClipboard in ascolto",
+  "mobile.channelDescription": "Mostra che NetClipboard è raggiungibile dagli altri tuoi dispositivi.",
+  "mobile.notifRunning": "In ascolto sulla rete locale",
+  "mobile.notifStop": "Ferma",
+  "mobile.starting": "Avvio in corso…",
+  "mobile.selfLine": "{0} · impronta {1}",
+  "mobile.noPeers": "Nessun dispositivo in rete. Controlla di essere sullo stesso Wi-Fi.",
+  "mobile.peerTrusted": "accoppiato",
+  "mobile.peerUnknown": "non accoppiato",
+  "mobile.pair": "Accoppia il dispositivo scelto",
+  "mobile.pickOne": "Scegli prima un dispositivo dall'elenco.",
+  "mobile.pairing": "Accoppiamento con {0}…",
+  "mobile.pairDone": "Ora {0} è tra i tuoi dispositivi.",
+  "mobile.pairRejected": "Accoppiamento rifiutato.",
+  "mobile.pairFailed": "Accoppiamento non riuscito.",
+  "mobile.sendClipboard": "Invia quello che hai copiato",
+  "mobile.clipboardEmpty": "Non c'è testo negli appunti.",
+  "mobile.received": "Ricevuto da {0}: è negli appunti."
 }

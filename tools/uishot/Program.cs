@@ -1,10 +1,11 @@
-using System.Drawing.Imaging;
+﻿using System.Drawing.Imaging;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using NetClipboard;
 using NetClipboard.Core;
 using NetClipboard.Core.Security;
+using NetClipboard.Platform;
 using NetClipboard.Net;
 using NetClipboard.Ui;
 
@@ -136,7 +137,7 @@ internal static class Program
     private static Form History()
     {
         var config = FakeConfig();
-        var history = new ClipboardHistory(config);
+        var history = new ClipboardHistory(config, WindowsSecretProtector.Instance);
 
         // La cronistoria vera sta su disco: la svuotiamo in memoria e mettiamo la
         // nostra. Non si salva nulla, quindi il file dell'utente resta intatto.
@@ -203,7 +204,7 @@ internal static class Program
 
     private static Form Devices()
     {
-        var identity = DeviceIdentity.LoadOrCreate();
+        var identity = DeviceIdentity.LoadOrCreate(WindowsSecretProtector.Instance);
         // Archivio di fiducia su un percorso usa e getta: i dispositivi veri
         // dell'utente non devono finire in una fotografia.
         var trust = new TrustStore(Path.Combine(ScratchDir, "trusted.json"));

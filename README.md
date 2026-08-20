@@ -1,11 +1,12 @@
-<p align="center"><img src="docs/logo.png" width="120" alt="NetClipboard"></p>
+﻿<p align="center"><img src="docs/logo.png" width="120" alt="NetClipboard"></p>
 
 <h1 align="center">NetClipboard</h1>
 
 Clipboard condivisa **peer-to-peer sulla LAN** per Windows, con **cronologia unificata
 tra tutti i tuoi device** (un "Win+V" cross-device). Supporta **testo, immagini e file**.
 
-Tray app leggera in **C# / WinForms / .NET 9**. Nessun server centrale.
+Tray app leggera in **C# / WinForms / .NET 10**, con un **client Android** che parla
+lo stesso protocollo. Nessun server centrale.
 
 🌐 **Sito**: https://blackslash76.github.io/NetClipboard/ · ⬇ **Download**: [Releases](https://github.com/Blackslash76/NetClipboard/releases/latest) · 📄 **Licenza**: [MIT](LICENSE)
 
@@ -40,10 +41,34 @@ Tray app leggera in **C# / WinForms / .NET 9**. Nessun server centrale.
 ## Build
 
 ```powershell
-dotnet build src\NetClipboard\NetClipboard.csproj -c Release
+dotnet build NetClipboard.slnx -c Release
 ```
 
-L'eseguibile è in `src\NetClipboard\bin\Release\net9.0-windows\NetClipboard.exe`.
+L'eseguibile è in `src\NetClipboard\bin\Release\net10.0-windows\NetClipboard.exe`.
+
+### Il client Android
+
+```powershell
+dotnet workload install android      # una volta sola, richiede privilegi di amministratore
+dotnet build src\NetClipboard.Android\NetClipboard.Android.csproj -c Debug
+```
+
+Sta fuori dalla solution di proposito: senza quel carico di lavoro non si
+compila, e la solution deve restare buona su una macchina Windows appena
+installata.
+
+Il protocollo **non è riscritto**: Android esegue lo stesso identico
+`NetClipboard.Core` di Windows, e ciò che passa sul cavo è descritto in
+[docs/PROTOCOL.md](docs/PROTOCOL.md). I valori del filo sono bloccati dal banco
+`tools/conformance`, che gira in CI sia su Windows sia su Linux.
+
+Due limiti di Android che è bene conoscere prima di provarlo:
+
+- la clipboard si può **leggere** solo mentre l'applicazione è in primo piano
+  (Android 10 e successivi). Dal PC al telefono il contenuto arriva da sé; dal
+  telefono al PC si manda con un gesto;
+- serve un servizio in primo piano, quindi una notifica sempre visibile: è il
+  modo in cui il sistema dichiara che qualcosa sta ascoltando la rete.
 
 ## Primo avvio (su ogni PC)
 
@@ -60,9 +85,14 @@ L'eseguibile è in `src\NetClipboard\bin\Release\net9.0-windows\NetClipboard.exe
 ## Installer
 
 La pipeline di release produce **NetClipboard-Setup-x.y.z.exe** (Inno Setup): installazione
-**per-utente** in `%LocalAppData%\Programs\NetClipboard` (nessun admin), collegamenti nel
+**per macchina** in `C:\Program Files\NetClipboard` (richiede UAC una volta), collegamenti nel
 menu Start, opzioni "avvia con Windows" e icona sul desktop, e disinstallazione pulita.
-L'installazione per-utente permette all'auto-update di sostituire l'eseguibile senza UAC.
+
+Da lì l'applicazione non può sostituirsi da sola, quindi l'auto-update prova prima a
+scrivere accanto al proprio eseguibile e, se non può, rilancia **elevato** il binario
+appena scaricato; l'app viene poi riavviata **senza privilegi**, passando da Explorer.
+Un processo lanciato da uno elevato ne erediterebbe i diritti, e NetClipboard legge la
+clipboard e sta in ascolto sulla rete.
 
 ## Menu tray
 
@@ -87,7 +117,7 @@ Configurazione (una volta): in **Impostazioni → URL aggiornamenti** metti
 
 ### Pubblicare una nuova versione
 
-1. Alza `<Version>` in `NetClipboard.csproj` e ripubblica il single-file.
+1. Alza `<Version>` in `Directory.Build.props` (da lì derivano l'eseguibile, il manifest e il `versionCode` dell'APK) e ripubblica il single-file.
 2. Firma la release (la chiave privata è in `.vault`, mai condivisa):
    ```powershell
    NetClipboard.exe --sign-release publish\NetClipboard.exe 1.1.0 `
@@ -148,23 +178,52 @@ incollare** con un normale Ctrl+V in Esplora file. Se l'host è offline compare 
 
 ## Struttura del codice
 
+Una regola sola, e da lì discende tutto il resto: **quello che passa sulla rete
+sta in `NetClipboard.Core`, e non contiene niente di specifico a un sistema
+operativo.** Ciò che il sistema deve fornire — dove si custodisce una chiave, chi
+giudica un contenuto in arrivo — entra da un'interfaccia, e la piattaforma la
+implementa.
+
 ```
-src/NetClipboard/
-├─ Program.cs                entry, single-instance, --install-firewall
-├─ AppConfig.cs              config JSON
-├─ Core/Security/            identità (ECDSA), handshake+SAS, sessione, trust store
-├─ Update/Updater.cs         auto-update firmato
+Directory.Build.props           la VERSIONE, una sola per tutti i prodotti
+
+src/NetClipboard.Core/          net10.0 · lo stesso codice su ogni piattaforma
+├─ AppConfig.cs                 configurazione JSON
+├─ Resources/it.json            i testi, uno per tutte le applicazioni
 ├─ Core/
-│  ├─ SecureChannel.cs       AES-256-GCM + PBKDF2
-│  ├─ ClipboardPayload.cs    modello + (de)serializzazione binaria
-│  ├─ ClipboardMonitor.cs    WM_CLIPBOARDUPDATE, hotkey, anti-loop
-│  └─ ClipboardHistory.cs    cronologia unificata + persistenza
-├─ Net/
-│  ├─ Peer.cs / PeerDiscovery.cs   annunci UDP cifrati
-│  ├─ ClipboardTransport.cs        server+client TCP
-│  └─ FirewallHelper.cs            regola firewall via UAC
-└─ Ui/
-   ├─ TrayContext.cs         orchestratore (system tray)
-   ├─ HistoryForm.cs         popup cronologia
-   └─ SettingsForm.cs        impostazioni
+│  ├─ ClipboardPayload.cs       modello e (de)serializzazione binaria
+│  ├─ FileOffer.cs              offerta di file (solo metadati)
+│  ├─ ClipboardHistory.cs       cronologia cifrata a riposo
+│  ├─ CfHtml.cs                 il formato HTML della clipboard
+│  └─ Security/
+│     ├─ DeviceIdentity.cs      identità ECDSA P-256
+│     ├─ Handshaker.cs          handshake autenticato + SAS
+│     ├─ SessionCipher.cs       AES-256-GCM di sessione
+│     ├─ TrustStore.cs          chiavi pinnate e revoche
+│     ├─ ISecretProtector.cs    dove il sistema custodisce un segreto
+│     └─ IContentScanner.cs     chi giudica un contenuto in arrivo
+└─ Net/
+   ├─ ClipboardTransport.cs     servente e cliente TCP, gossip, offerte
+   └─ PeerDiscovery.cs          annunci UDP
+
+src/NetClipboard/               net10.0-windows · WinForms
+├─ Program.cs                   avvio, istanza unica, --install-firewall
+├─ Platform/WindowsPlatform.cs  DPAPI e AMSI dietro le interfacce del core
+├─ Core/ClipboardMonitor.cs     WM_CLIPBOARDUPDATE, scorciatoia, anti-eco
+├─ Core/Security/               AMSI, stato dell'antivirus di sistema
+├─ Net/FirewallHelper.cs        regola del firewall via UAC
+├─ Update/Updater.cs            aggiornamento firmato
+└─ Ui/                          tray, cronologia, impostazioni, dispositivi
+
+src/NetClipboard.Android/       net10.0-android · Avalonia
+├─ Platform/                    portachiavi di sistema, clipboard, conferme
+├─ Services/                    il servizio in primo piano che tiene l'ascolto
+└─ Views/MainView.cs            l'unica schermata
+
+tools/                          fuori dalla solution, fuori dal rilascio
+├─ conformance/                 i valori del filo, bloccati in vectors.json
+├─ selftest/                    parser di rete sotto dati ostili
+├─ e2e/                         nove istanze del trasporto su loopback
+├─ uishot/                      fotografa le finestre nei due temi
+└─ check-strings.ps1            i cataloghi contro l'uso reale
 ```

@@ -91,6 +91,12 @@ public sealed class ClipboardTransport : IDisposable
     private readonly TrustStore _trust;
     private readonly OfferStore _offerStore;
 
+    /// <summary>
+    /// Chi giudica i contenuti in arrivo. Lo fornisce la piattaforma: su Windows
+    /// e' AMSI, altrove non c'e' nessuno e ogni esito e' "non analizzato".
+    /// </summary>
+    private readonly IContentScanner _scanner;
+
     private readonly ConcurrentDictionary<string, Peer> _peers = new();
     private readonly ConcurrentDictionary<string, byte> _activeIps = new();
     private readonly Lock _cacheGate = new();
@@ -102,8 +108,17 @@ public sealed class ClipboardTransport : IDisposable
     public event Action<ReceivedClip>? Received;
     public event Action? PeersChanged;
 
-    /// <summary>Chiamato per confermare un pairing mostrando il codice SAS; ritorna true se accettato.</summary>
-    public Func<PairingPrompt, bool>? PairingConfirm;
+    /// <summary>
+    /// Chiamato per confermare un pairing mostrando il codice SAS; ritorna true
+    /// se accettato.
+    ///
+    /// Il token viene annullato quando l'altro lato ha gia' detto di no (o se ne
+    /// e' andato): chi mostra la domanda deve chiuderla. Restare a chiedere di
+    /// confrontare un codice che dall'altra parte non interessa piu' a nessuno
+    /// fa solo perdere tempo, e su due dispositivi diversi la finestra rimasta
+    /// aperta sembra un guasto.
+    /// </summary>
+    public Func<PairingPrompt, CancellationToken, bool>? PairingConfirm;
 
     /// <summary>Chiamato quando un peer NON accoppiato ci manda qualcosa; ritorna true se l'utente accetta.</summary>
     public Func<IncomingOffer, bool>? OfferConfirm;
@@ -169,12 +184,14 @@ public sealed class ClipboardTransport : IDisposable
     /// <summary>0/1: una sola finestra di conferma per volta, qualunque sia il mittente.</summary>
     private int _offerDialogOpen;
 
-    public ClipboardTransport(AppConfig config, DeviceIdentity identity, TrustStore trust, OfferStore offerStore)
+    public ClipboardTransport(AppConfig config, DeviceIdentity identity, TrustStore trust, OfferStore offerStore,
+                              IContentScanner? scanner = null)
     {
         _config = config;
         _identity = identity;
         _trust = trust;
         _offerStore = offerStore;
+        _scanner = scanner ?? NoContentScanner.Instance;
         // Su disco, e non solo in memoria: fra l'accettazione e l'incolla possono
         // passare minuti, e un riavvio dell'app non deve mangiarsi i file.
         _fetchGrants = new GrantStore(Path.Combine(config.StateDir, "grants.json"), GrantLifetime);
@@ -388,10 +405,10 @@ public sealed class ClipboardTransport : IDisposable
     /// Analizza cio' che e' gia' arrivato. Per i file non c'e' ancora nulla da
     /// analizzare: viaggiano come elenco, e il contenuto si preleva dopo.
     /// </summary>
-    private static ScanVerdict ScanIncoming(ClipboardPayload payload) => payload.Kind switch
+    private ScanVerdict ScanIncoming(ClipboardPayload payload) => payload.Kind switch
     {
-        PayloadKind.Text => AntimalwareScan.ScanBytes(Encoding.UTF8.GetBytes(payload.Text ?? ""), "clipboard.txt"),
-        PayloadKind.Image => AntimalwareScan.ScanBytes(payload.ImagePng ?? Array.Empty<byte>(), "clipboard.png"),
+        PayloadKind.Text => _scanner.ScanBytes(Encoding.UTF8.GetBytes(payload.Text ?? ""), "clipboard.txt"),
+        PayloadKind.Image => _scanner.ScanBytes(payload.ImagePng ?? Array.Empty<byte>(), "clipboard.png"),
         _ => ScanVerdict.NotScanned,
     };
 
@@ -551,12 +568,8 @@ public sealed class ClipboardTransport : IDisposable
 
             await WriteSessionAsync(stream, s.Cipher, BuildPair(), cts.Token);
 
-            var mine = PairingConfirm?.Invoke(
-                new PairingPrompt(s.R.Sas, nameHint, DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId))) ?? false;
-            await WriteSessionAsync(stream, s.Cipher, new byte[] { (byte)(mine ? 1 : 0) }, cts.Token);
-
-            var peerAck = await ReadSessionAsync(stream, s.Cipher, cts.Token);
-            var theirs = peerAck is { Length: > 0 } && peerAck[0] == 1;
+            var (mine, theirs) = await ExchangePairAnswersAsync(stream, s,
+                new PairingPrompt(s.R.Sas, nameHint, DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId)), cts.Token);
 
             if (mine && theirs)
             {
@@ -579,12 +592,8 @@ public sealed class ClipboardTransport : IDisposable
     {
         var (clientName, clientPort, _, _) = ParsePing(body); // stesso formato (name, port, gossip, identità)
 
-        var mine = PairingConfirm?.Invoke(
-            new PairingPrompt(s.R.Sas, clientName, DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId))) ?? false;
-        await WriteSessionAsync(stream, s.Cipher, new byte[] { (byte)(mine ? 1 : 0) }, ct);
-
-        var peerAck = await ReadSessionAsync(stream, s.Cipher, ct);
-        var theirs = peerAck is { Length: > 0 } && peerAck[0] == 1;
+        var (mine, theirs) = await ExchangePairAnswersAsync(stream, s,
+            new PairingPrompt(s.R.Sas, clientName, DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId)), ct);
 
         if (mine && theirs)
         {
@@ -592,6 +601,59 @@ public sealed class ClipboardTransport : IDisposable
             RememberIp(remote.ToString());
             UpsertPeer(s.R.PeerDeviceId, clientName, remote, clientPort, s.R.PeerPublicKeyDer, trusted: true);
             Log.Write($"[Pairing] fidato ora: {clientName} ({DeviceIdentity.ShortFingerprint(s.R.PeerDeviceId)})");
+        }
+    }
+
+    /// <summary>
+    /// Scambia le due risposte del pairing, ascoltando quella dell'altro
+    /// <b>mentre</b> si mostra la propria domanda.
+    ///
+    /// Prima si rispondeva e solo dopo si leggeva: chi annullava lasciava l'altro
+    /// davanti a una finestra che chiedeva di confrontare un codice ormai morto,
+    /// fino alla scadenza. Ora la lettura parte subito e, se l'altro ha detto no
+    /// o se n'e' andato, il token annulla la nostra domanda.
+    ///
+    /// I byte sul filo non cambiano: cambia solo che non si aspetta il proprio
+    /// utente prima di mettersi in ascolto. Nessun rischio di stallo — la
+    /// scrittura non dipende dalla lettura.
+    /// </summary>
+    private async Task<(bool Mine, bool Theirs)> ExchangePairAnswersAsync(
+        NetworkStream stream, Session s, PairingPrompt prompt, CancellationToken ct)
+    {
+        var peerAnswer = ReadPairAnswerAsync(stream, s.Cipher, ct);
+
+        using var peerGaveUp = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = peerAnswer.ContinueWith(t =>
+        {
+            if (t.Result == true) return; // ha detto si': la nostra domanda resta
+            try { peerGaveUp.Cancel(); } catch (ObjectDisposedException) { }
+        }, TaskScheduler.Default);
+
+        bool mine;
+        try { mine = PairingConfirm?.Invoke(prompt, peerGaveUp.Token) ?? false; }
+        catch (OperationCanceledException) { mine = false; }
+
+        try { await WriteSessionAsync(stream, s.Cipher, new[] { (byte)(mine ? 1 : 0) }, ct); }
+        catch (Exception ex) { Log.Write($"[Pairing] risposta non inviata: {ex.Message}"); }
+
+        return (mine, await peerAnswer == true);
+    }
+
+    /// <summary>
+    /// La risposta dell'altro lato: true si', false no, null se non e' arrivata
+    /// (connessione caduta, tempo scaduto). Non solleva: un pairing che si
+    /// interrompe non e' un errore da propagare, e' un no.
+    /// </summary>
+    private async Task<bool?> ReadPairAnswerAsync(NetworkStream stream, SessionCipher cipher, CancellationToken ct)
+    {
+        try
+        {
+            var frame = await ReadSessionAsync(stream, cipher, ct);
+            return frame is { Length: > 0 } ? frame[0] == 1 : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 

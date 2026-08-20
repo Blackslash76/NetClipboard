@@ -1,10 +1,11 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.IO;
 using NetClipboard.Core;
 using NetClipboard.Core.Identity;
 using NetClipboard.Core.Security;
 using NetClipboard.Net;
+using NetClipboard.Platform;
 using NetClipboard.Update;
 
 namespace NetClipboard.Ui;
@@ -55,7 +56,7 @@ public sealed class TrayContext : ApplicationContext
         _config = AppConfig.Load();
         _config.Save();
 
-        _identity = DeviceIdentity.LoadOrCreate();
+        _identity = DeviceIdentity.LoadOrCreate(WindowsSecretProtector.Instance);
         _trust = new TrustStore();
         _entra = new EntraAuth(_config.EntraClientId, _config.EntraTenant);
 
@@ -65,13 +66,13 @@ public sealed class TrayContext : ApplicationContext
         Updater.CleanupOld();
 
         _offerStore = new OfferStore(_config);
-        _history = new ClipboardHistory(_config);
+        _history = new ClipboardHistory(_config, WindowsSecretProtector.Instance);
         ClipboardHistory.CleanupReceived(_config.HistoryMaxAgeDays);
 
         _monitor = new ClipboardMonitor(_config) { OwnerDeviceId = _identity.DeviceId };
         _ = _monitor.Handle;
 
-        _transport = new ClipboardTransport(_config, _identity, _trust, _offerStore)
+        _transport = new ClipboardTransport(_config, _identity, _trust, _offerStore, AmsiContentScanner.Instance)
         {
             PairingConfirm = ShowSasDialog,
             OfferConfirm = ShowIncomingOfferDialog,
@@ -411,12 +412,28 @@ public sealed class TrayContext : ApplicationContext
 
     // ----- Pairing / dispositivi -----
 
-    private bool ShowSasDialog(PairingPrompt prompt)
+    /// <summary>
+    /// Mostra il codice di pairing. <paramref name="peerGaveUp"/> scatta se
+    /// l'altro dispositivo ha gia' annullato: la finestra si chiude da sola,
+    /// invece di restare a chiedere di confrontare un codice che dall'altra parte
+    /// non interessa piu' a nessuno.
+    /// </summary>
+    private bool ShowSasDialog(PairingPrompt prompt, CancellationToken peerGaveUp)
     {
-        if (!_monitor.IsHandleCreated) return false;
+        if (!_monitor.IsHandleCreated || peerGaveUp.IsCancellationRequested) return false;
         return (bool)_monitor.Invoke(new Func<bool>(() =>
         {
             using var dlg = new SasDialog(prompt);
+            using var closeOnPeer = peerGaveUp.Register(() =>
+            {
+                // L'annullamento arriva da un thread della rete: la finestra si
+                // tocca solo dal suo.
+                try
+                {
+                    if (dlg.IsHandleCreated) dlg.BeginInvoke(() => dlg.Close());
+                }
+                catch (ObjectDisposedException) { } // gia' chiusa dall'utente
+            });
             return dlg.ShowDialog() == DialogResult.OK;
         }));
     }
