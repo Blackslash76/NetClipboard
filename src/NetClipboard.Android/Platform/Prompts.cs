@@ -1,7 +1,15 @@
 ﻿namespace NetClipboard.Droid.Platform;
 
-/// <summary>Una domanda da porre a chi usa il telefono, e le due risposte possibili.</summary>
-public sealed record PromptRequest(string Title, string Body, string Accept, string Reject);
+/// <summary>
+/// Una domanda da porre a chi usa il telefono, e le due risposte possibili.
+///
+/// <paramref name="Code"/> c'e' solo per l'accoppiamento: sono le sei cifre da
+/// confrontare con l'altro dispositivo, e viaggiano a parte invece che dentro al
+/// corpo perche' vanno mostrate grandi e distanziate — sei cifre in mezzo a una
+/// frase si leggono male, e leggerle male qui significa accettare un
+/// accoppiamento sbagliato.
+/// </summary>
+public sealed record PromptRequest(string Title, string Body, string Accept, string Reject, string? Code = null);
 
 /// <summary>
 /// Il ponte fra il trasporto, che chiede una conferma e <b>aspetta</b> su un

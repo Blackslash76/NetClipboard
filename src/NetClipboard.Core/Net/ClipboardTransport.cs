@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -56,6 +56,13 @@ public sealed class ClipboardTransport : IDisposable
     private const byte OpPing = 1;
     private const byte OpPush = 2;
     private const byte OpFetch = 3;
+
+    /// <summary>
+    /// Revocati di cui si e' gia' scritto il rifiuto, per non ripetere la stessa
+    /// riga a ogni giro di gossip. Vive quanto il processo: al riavvio si torna a
+    /// dirlo una volta, che e' esattamente quello che serve.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _loggedRevoked = new(StringComparer.OrdinalIgnoreCase);
     private const byte OpPair = 4;
     private const byte OpOffer = 5;   // invio mirato a un peer non accoppiato (richiede conferma)
 
@@ -915,7 +922,14 @@ public sealed class ClipboardTransport : IDisposable
             // riproposto: la revoca si azzera solo con un pairing esplicito.
             if (_trust.IsRevoked(g.DeviceId))
             {
-                Log.Write($"[Mesh] presentazione ignorata, revocato: {g.Name} ({DeviceIdentity.ShortFingerprint(g.DeviceId)})");
+                // Il rifiuto e' a ogni giro; la RIGA no. Chi ci presenta un
+                // revocato non smette — non ha modo di sapere che l'abbiamo
+                // revocato noi — quindi la presentazione ritorna a ogni giro di
+                // gossip, cioe' circa una volta al secondo. Scrivendola ogni volta
+                // il log del telefono era arrivato a 851 KB in mezza giornata,
+                // fatto di una sola frase ripetuta.
+                if (_loggedRevoked.TryAdd(g.DeviceId, 0))
+                    Log.Write($"[Mesh] presentazione ignorata, revocato: {g.Name} ({DeviceIdentity.ShortFingerprint(g.DeviceId)})");
                 continue;
             }
 

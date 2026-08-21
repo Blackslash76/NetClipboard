@@ -11,9 +11,18 @@
     <RootNamespace>NetClipboard.Droid</RootNamespace>
     <AssemblyName>NetClipboard.Android</AssemblyName>
 
-    <!-- Android 8: sotto non ci sono i canali di notifica, e senza quelli un
-         servizio in primo piano non si puo' nemmeno mostrare. -->
-    <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
+    <!-- Android 10.
+
+         Era 8, il minimo per avere i canali di notifica. Ma il progetto ha
+         sempre dato per scontato il comportamento di Android 10 senza dirlo: la
+         clipboard si legge solo in primo piano (da 10), il tipo del servizio in
+         primo piano si dichiara (da 10, API 29), e i file ricevuti si salvano in
+         MediaStore senza chiedere permessi (da 10). Sotto, l'applicazione o non
+         parte o si comporta in modo diverso da come e' scritta.
+
+         Alzarlo non toglie niente a nessuno: non e' mai stata pubblicata,
+         quindi non c'e' nessuno da lasciare indietro. -->
+    <SupportedOSPlatformVersion>29</SupportedOSPlatformVersion>
 
     <!-- L'identificativo del pacchetto. NON e' modificabile dopo la prima
          pubblicazione su Play: cambiarlo significa un'altra applicazione, con

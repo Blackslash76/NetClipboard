@@ -23,9 +23,30 @@
        piu' la chiave di UN dispositivo. -->
   <application
       android:label="@string/app_name"
+      android:icon="@mipmap/ic_launcher"
+      android:roundIcon="@mipmap/ic_launcher_round"
       android:allowBackup="false"
       android:fullBackupContent="false"
       android:dataExtractionRules="@xml/data_extraction_rules"
-      android:supportsRtl="true" />
+      android:supportsRtl="true">
+
+    <!-- Un'immagine negli appunti di Android non e' un blocco di byte: e' un
+         content:// che punta a un file, e chi incolla lo legge da li'. Senza un
+         provider, i nostri file sono in una cartella privata che nessun'altra
+         applicazione puo' aprire, e "incolla" non troverebbe niente.
+
+         grantUriPermissions: il permesso di lettura lo si concede caso per caso,
+         a chi legge gli appunti, e scade da solo. Non e' una cartella aperta. -->
+    <provider
+        android:name="androidx.core.content.FileProvider"
+        android:authorities="${applicationId}.files"
+        android:exported="false"
+        android:grantUriPermissions="true">
+      <meta-data
+          android:name="android.support.FILE_PROVIDER_PATHS"
+          android:resource="@xml/file_paths" />
+    </provider>
+
+  </application>
 
 </manifest>

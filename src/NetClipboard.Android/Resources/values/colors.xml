@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Il fondo della schermata di avvio, nelle stesse due tinte del fondo
+     finestra dell'applicazione Windows (Ui/Theme.cs, Theme.Bg): cosi' l'avvio
+     non lampeggia di un colore che poi non si rivede piu'. La versione scura sta
+     in values-night. -->
+<resources>
+  <color name="splash_background">#F6F6FA</color>
+</resources>

@@ -14,4 +14,24 @@
     <item name="windowActionBar">false</item>
     <item name="windowNoTitle">true</item>
   </style>
+
+  <!-- Il tema con cui l'attivita' NASCE, e che si cambia in NetClipboardTheme
+       dentro OnCreate.
+
+       Serve perche' fra il tocco sull'icona e il primo disegno di Avalonia passa
+       qualche decimo di secondo, e senza questo li' non c'e' niente: uno schermo
+       del colore di sistema, che sembra un'applicazione che non parte. Con
+       questo c'e' il fondo della tavolozza e il logo, e la transizione verso la
+       schermata vera non si nota.
+
+       Da Android 12 la schermata di avvio la disegna il sistema per conto suo e
+       ignora windowBackground: la sua versione sta in values-v31. -->
+  <style name="NetClipboardTheme.Launch" parent="NetClipboardTheme">
+    <item name="android:windowBackground">@drawable/splash</item>
+  </style>
+
+  <!-- La destinazione di "Condividi" non ha interfaccia: prende, manda e
+       sparisce. Senza un tema trasparente comparirebbe un lampo di finestra
+       vuota, che sembra un errore. -->
+  <style name="NetClipboardTheme.Invisible" parent="android:Theme.Translucent.NoTitleBar" />
 </resources>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Il logo intero, fondo compreso: e' la trasposizione di docs/logo.png in
+     forma vettoriale, misura per misura, cosi' l'immagine che compare all'avvio
+     sul telefono e quella che sta nel README sono la stessa cosa e non due
+     disegni che si somigliano. Serve alla schermata di avvio. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        xmlns:aapt="http://schemas.android.com/aapt"
+        android:width="256dp"
+        android:height="256dp"
+        android:viewportWidth="256"
+        android:viewportHeight="256">
+
+  <path android:pathData="M72,16 H184 A56,56 0 0 1 240,72 V184 A56,56 0 0 1 184,240 H72 A56,56 0 0 1 16,184 V72 A56,56 0 0 1 72,16 Z">
+    <aapt:attr name="android:fillColor">
+      <gradient
+          android:type="linear"
+          android:startX="16" android:startY="16"
+          android:endX="240" android:endY="240">
+        <item android:offset="0" android:color="#FF7B5CF5" />
+        <item android:offset="1" android:color="#FF35B7DF" />
+      </gradient>
+    </aapt:attr>
+  </path>
+
+  <path
+      android:fillColor="#FFF9FAFD"
+      android:pathData="M82,64 H174 A16,16 0 0 1 190,80 V192 A16,16 0 0 1 174,208 H82 A16,16 0 0 1 66,192 V80 A16,16 0 0 1 82,64 Z" />
+  <path
+      android:fillColor="#FF6C54E8"
+      android:pathData="M107,62 H149 A7,7 0 0 1 156,69 V69 A7,7 0 0 1 149,76 H107 A7,7 0 0 1 100,69 V69 A7,7 0 0 1 107,62 Z" />
+  <path
+      android:strokeColor="#FFB19DF9"
+      android:strokeWidth="11"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:pathData="M128,111 L98,170 L158,170 Z" />
+  <path android:fillColor="#FF7E5CF6" android:pathData="M114,111 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0 Z" />
+  <path android:fillColor="#FF34B6DE" android:pathData="M84,170 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0 Z" />
+  <path android:fillColor="#FF34B6DE" android:pathData="M144,170 a14,14 0 1,0 28,0 a14,14 0 1,0 -28,0 Z" />
+</vector>

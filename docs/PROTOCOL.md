@@ -1,4 +1,4 @@
-# Il protocollo di NetClipboard
+﻿# Il protocollo di NetClipboard
 
 Versione del filo: **2**. Questo documento descrive cosa passa davvero sul cavo,
 byte per byte. Serve a due cose: rileggere una decisione senza doverla ricavare
@@ -298,10 +298,53 @@ Fetch. È ciò che permette di "copiare" venti gigabyte senza mandarli a nessuno
 [ nome del proprietario : stringa ]
 [ numero di voci : int32 ]
    ripetuto: [ indice radice : int32 ][ è cartella : 1 ][ dimensione : int64 ][ percorso relativo : stringa ]
+[ miniatura : campo ]                      ← facoltativa, in coda
+[ numero di date : int32 ]                 ← facoltativa, in coda
+   ripetuto: [ modifica, ms Unix UTC : int64 ]
 ```
 
 Al massimo **50 000** voci, e comunque non più di quante ne stiano nei byte
 rimasti (ogni voce ne occupa almeno 17).
+
+La **miniatura** è un JPEG o un PNG piccolo, al massimo **64 KB**, e serve a
+mostrare *cosa* si sta per scaricare: nel rendering ritardato chi riceve ha solo
+nomi e dimensioni, e di una foto vedrebbe soltanto il nome. È in coda per la
+regola del §"come si cambia il protocollo": un mittente di versione precedente
+non la manda affatto, e un lettore di versione precedente si ferma dopo le voci
+senza accorgersene. Chi legge deve accettare **entrambi** i casi — l'assenza non
+è un errore — e ignorare una miniatura più grande del tetto invece di scartare
+l'offerta.
+
+> **La fornisce chi manda.** È quindi un'immagine di provenienza esterna che il
+> destinatario decodifica: un decodificatore di immagini è una superficie
+> d'attacco. Si disegna solo per i mittenti **fidati**, mai nella richiesta di
+> conferma di un invio da un non accoppiato — che è esattamente il momento in cui
+> non ci si fida.
+
+Le **date di modifica** sono una per voce, nello stesso ordine delle voci, in
+millisecondi dall'epoca Unix (UTC). Millisecondi e non tick di .NET perché questo
+è un formato di filo, e deve poterlo scrivere anche chi non programma in .NET.
+
+Si scrivono **solo se almeno una è nota**: un'offerta tutta senza date non porta
+la coda affatto, e resta byte per byte quella di prima. Zero significa *non nota*
+— mittente di versione precedente, o file la cui data non si è potuta leggere —
+e non deve essere trattato come una data reale. Chi legge accetta che il numero
+di date non coincida con quello delle voci: in quel caso non sono le sue, e le
+ignora tutte.
+
+> **A cosa servono.** Non a mostrare una data: all'**impronta del contenuto**.
+> L'impronta di un'offerta non può guardare i byte — i byte non sono ancora
+> viaggiati, è tutto il senso del prelievo differito — quindi guarda i metadati.
+> Con soli percorso e dimensione, due file diversi ma della stessa misura
+> risultano lo stesso contenuto: la cronologia li fonde in una voce sola, e chi
+> incolla rischia di vedersi servire i byte sbagliati. Con la data si
+> distinguono. Resta un'approssimazione, e va detto: è il meglio che si può fare
+> senza trasferire i byte.
+
+**Chi salta una coda deve smettere di leggere.** Se una coda si ignora senza
+consumarne i byte — per esempio una miniatura oltre il tetto — il flusso resta
+disallineato, e tutto ciò che segue verrebbe letto storto. Da quel punto in poi
+non si legge più niente.
 
 ---
 

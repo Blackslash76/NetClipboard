@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cosa il provider e' disposto a prestare, e niente di piu'.
+
+     Solo "clip": la cartella dove finisce l'immagine che si sta mettendo negli
+     appunti. NON la cartella dei file ricevuti, NON quella dei file in uscita,
+     NON la radice dei dati dell'applicazione — li' dentro ci sono la chiave
+     privata del dispositivo, l'elenco dei fidati e la cronologia cifrata, e un
+     provider che li includesse li renderebbe raggiungibili a chiunque riesca a
+     farsi dare un URI.
+
+     Il permesso e' comunque puntuale e temporaneo, ma la prima difesa e' non
+     mettere niente di importante dietro alla porta. -->
+<paths>
+  <files-path name="clip" path="clip/" />
+</paths>

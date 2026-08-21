@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using System.IO;
 using NetClipboard.Core;
@@ -88,7 +88,7 @@ public sealed class HistoryForm : Form
             for (var i = _list.Items.Count - 1; i >= 0; i--)
             {
                 if (_list.Items[i] is not HistoryItem it || !it.FromExternal) continue;
-                if (RemainingFraction(it) <= 0)
+                if (ClipboardHistory.RemainingFraction(it) <= 0)
                 {
                     // Appena scaduta va ridisegnata una volta, per passare a spenta.
                     if (!_expired.Add(it.Id)) continue;
@@ -311,7 +311,7 @@ public sealed class HistoryForm : Form
         // Anello solo finche' il conto alla rovescia ha senso: una riga spenta
         // porta l'etichetta, non un anello vuoto.
         if (item.FromExternal && !spent)
-            DrawExpiryRing(g, slot, RemainingFraction(item));
+            DrawExpiryRing(g, slot, ClipboardHistory.RemainingFraction(item));
 
         // L'avatar di una riga spenta si smorza, cosi' la riga si legge come
         // disattivata gia' dalla coda dell'occhio, prima di leggere l'etichetta.
@@ -343,19 +343,10 @@ public sealed class HistoryForm : Form
             && (item.LocalRootPaths == null || item.LocalRootPaths.Count == 0) ? L.T("history.toDownload") : "";
         var origin = item.IsLocal ? L.T("history.thisPc") : item.Origin;
         if (item.FromExternal) origin = L.T("history.external", origin);
-        var meta = L.T("history.meta", pin, origin, LocalTime(item.TimestampUtc), toFetch);
+        var meta = L.T("history.meta", pin, origin, TimeText.Relative(item.TimestampUtc), toFetch);
         TextRenderer.DrawText(g, meta, _fMeta,
             new Rectangle(textLeft, row.Top + P(24), textWidth, P(16)), spent ? Theme.TextSpent : Theme.TextMuted,
             TextFormatFlags.EndEllipsis | TextFormatFlags.Left | TextFormatFlags.NoPadding);
-    }
-
-    /// <summary>Quanta vita resta a un contenuto esterno, da 1 (appena arrivato) a 0 (scaduto).</summary>
-    private static double RemainingFraction(HistoryItem item)
-    {
-        var total = ClipboardHistory.ExternalLifetime(item.Kind).TotalMilliseconds;
-        if (total <= 0) return 0;
-        var left = total - (DateTime.UtcNow - item.TimestampUtc).TotalMilliseconds;
-        return Math.Clamp(left / total, 0, 1);
     }
 
     /// <summary>
@@ -391,7 +382,15 @@ public sealed class HistoryForm : Form
 
     private Image? GetThumb(HistoryItem item, int size)
     {
-        if (item.Kind != PayloadKind.Image || item.BlobFile == null) return null;
+        if (item.BlobFile == null) return null;
+        if (item.Kind != PayloadKind.Image && item.Kind != PayloadKind.Files) return null;
+
+        // La miniatura di un'offerta la fornisce CHI MANDA: e' un'immagine che
+        // arriva da fuori e che tocca a noi decodificare. Da un dispositivo
+        // fidato va bene; da un estraneo che ci ha mandato qualcosa no — quello
+        // e' esattamente il momento in cui non ci si fida, e un decodificatore
+        // di immagini e' una superficie d'attacco. Li' resta il distintivo.
+        if (item.Kind == PayloadKind.Files && item.FromExternal) return null;
         var key = item.Id + "@" + size;
         if (_thumbCache.TryGetValue(key, out var cached)) return cached;
         try
@@ -412,16 +411,6 @@ public sealed class HistoryForm : Form
             return thumb;
         }
         catch { return null; }
-    }
-
-    private static string LocalTime(DateTime utc)
-    {
-        var local = utc.ToLocalTime();
-        var delta = DateTime.Now - local;
-        if (delta.TotalSeconds < 60) return L.T("time.now");
-        if (delta.TotalMinutes < 60) return L.T("time.minutesAgo", (int)delta.TotalMinutes);
-        if (delta.TotalHours < 24) return L.T("time.hoursAgo", (int)delta.TotalHours);
-        return local.ToString(L.T("time.dateFormat"));
     }
 
     private static GraphicsPath RoundedRect(Rectangle r, int radius)

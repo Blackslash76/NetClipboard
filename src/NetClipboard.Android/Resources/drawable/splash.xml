@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- La schermata di avvio per i telefoni prima di Android 12: un fondo del
+     colore della tavolozza e il logo al centro. Da Android 12 in su ci pensa il
+     sistema (vedi values-v31/styles.xml), che usa da se' l'icona
+     dell'applicazione: qui resta il fondo, che e' cio' che si vede finche'
+     Avalonia non ha disegnato. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+  <item android:drawable="@color/splash_background" />
+  <item
+      android:gravity="center"
+      android:width="128dp"
+      android:height="128dp"
+      android:drawable="@drawable/ic_logo" />
+</layer-list>

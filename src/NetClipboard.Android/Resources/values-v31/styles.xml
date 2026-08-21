@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Da Android 12 la schermata di avvio e' del sistema: disegna lui il fondo e
+     al centro l'icona dell'applicazione, e windowBackground non lo guarda
+     nessuno. Qui si dichiara solo il colore del fondo — l'icona la prende da
+     sola dal manifest, gia' ritagliata nella forma giusta per quel telefono, che
+     e' meglio di qualunque immagine si possa mettere a mano. -->
+<resources>
+  <style name="NetClipboardTheme.Launch" parent="NetClipboardTheme">
+    <item name="android:windowBackground">@drawable/splash</item>
+    <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+  </style>
+</resources>

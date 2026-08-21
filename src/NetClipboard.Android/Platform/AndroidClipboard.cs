@@ -56,19 +56,50 @@ public static class AndroidClipboard
     /// essere vietata — quindi il contenuto arriva negli appunti anche ad
     /// applicazione chiusa, che poi e' il caso normale: si copia sul PC e si va a
     /// incollare sul telefono.
-    ///
-    /// Si passa dal thread principale perche' la clipboard e' un servizio di
-    /// sistema e non tutte le versioni di Android accettano di riceverlo da un
-    /// thread qualunque; qui arriviamo da un thread della rete.
     /// </summary>
-    public static void Write(ClipboardPayload payload)
+    /// <returns>
+    /// Falso se il contenuto non e' testo. Le immagini hanno una strada loro
+    /// (<see cref="WriteImage"/>), perche' negli appunti di Android non ci va
+    /// l'immagine ma il RIFERIMENTO a un file. Si risponde invece di tacere,
+    /// cosi' chi ha toccato la voce lo viene a sapere.
+    /// </returns>
+    public static bool Write(ClipboardPayload payload)
     {
-        if (payload.Kind != PayloadKind.Text || payload.Text == null) return;
+        if (payload.Kind != PayloadKind.Text || payload.Text == null) return false;
 
         var clip = payload.Html != null
             ? ClipData.NewHtmlText(L.T("app.name"), payload.Text, payload.Html)
             : ClipData.NewPlainText(L.T("app.name"), payload.Text);
-        if (clip == null) return;
+        return Put(clip);
+    }
+
+    /// <summary>
+    /// Mette negli appunti un'immagine, cioe' il <b>riferimento</b> a un file che
+    /// il nostro provider e' disposto a prestare (vedi <see cref="IncomingStore"/>).
+    ///
+    /// Non esiste un modo di mettere dei pixel negli appunti di Android: si mette
+    /// un <c>content://</c>, e chi incolla lo apre. Il permesso di lettura lo
+    /// concede il sistema a chi legge la clipboard, e scade da solo — per questo
+    /// il file deve stare dietro al provider e non in una cartella qualunque.
+    /// </summary>
+    public static bool WriteImage(Android.Net.Uri uri)
+    {
+        var resolver = Application.Context.ContentResolver;
+        if (resolver == null) return false;
+
+        return Put(ClipData.NewUri(resolver, L.T("app.name"), uri));
+    }
+
+    /// <summary>
+    /// Si passa dal thread principale perche' la clipboard e' un servizio di
+    /// sistema e non tutte le versioni di Android accettano di riceverlo da un
+    /// thread qualunque; qui arriviamo da un thread della rete.
+    /// </summary>
+    private static bool Put(ClipData? clip)
+    {
+        // Android puo' rispondere null: qui si risponde falso, invece di far
+        // credere che il contenuto sia negli appunti.
+        if (clip == null) return false;
 
         new Handler(Looper.MainLooper!).Post(() =>
         {
@@ -82,5 +113,6 @@ public static class AndroidClipboard
                 Log.Write($"[Android] appunti non aggiornati: {ex.Message}");
             }
         });
+        return true;
     }
 }

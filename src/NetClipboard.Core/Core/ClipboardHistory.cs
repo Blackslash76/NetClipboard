@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -19,7 +19,14 @@ public sealed class HistoryItem
     // Testo
     public string? Text { get; set; }
 
-    // Immagine: nome del blob PNG in %AppData%\NetClipboard\history
+    /// <summary>
+    /// Nome del blob dell'immagine, nella cartella della cronologia.
+    ///
+    /// Per una voce immagine e' l'immagine stessa; per un'offerta di file e' la
+    /// MINIATURA che il mittente ha allegato, se ce n'era una. In entrambi i casi
+    /// e' cio' che l'elenco disegna, e si legge con
+    /// <see cref="ClipboardHistory.ReadBlob"/>.
+    /// </summary>
     public string? BlobFile { get; set; }
 
     /// <summary>
@@ -96,6 +103,39 @@ public sealed class ClipboardHistory
     /// </summary>
     public static bool IsSpent(HistoryItem item) => item.Used || IsExpired(item);
 
+    /// <summary>
+    /// Quanta vita resta a un contenuto esterno, da 1 (appena arrivato) a 0
+    /// (scaduto). Le voci proprie non scadono: per loro vale sempre 1.
+    ///
+    /// Serve a disegnare l'anello del conto alla rovescia, e sta qui accanto a
+    /// <see cref="ExternalLifetime"/> perche' e' la stessa regola vista da
+    /// un'altra angolazione: se un giorno cambia la durata, cambia in un posto
+    /// solo e l'anello resta sincronizzato con la scadenza vera.
+    /// </summary>
+    public static double RemainingFraction(HistoryItem item)
+    {
+        if (!item.FromExternal) return 1;
+        var total = ExternalLifetime(item.Kind).TotalMilliseconds;
+        if (total <= 0) return 0;
+        var left = total - (DateTime.UtcNow - item.TimestampUtc).TotalMilliseconds;
+        return Math.Clamp(left / total, 0, 1);
+    }
+
+    /// <summary>
+    /// Quanto puo' pesare in tutto cio' che sta FUORI dall'indice: immagini,
+    /// formattazione, miniature.
+    ///
+    /// Serve perche' <see cref="AppConfig.HistorySize"/> conta le VOCI, non i
+    /// byte, e le due cose non si somigliano: trenta voci di testo sono qualche
+    /// decina di kilobyte, trenta immagini da 50 MB — il tetto che il trasporto
+    /// accetta — sono un gigabyte e mezzo. Su un PC si nota tardi; su un telefono
+    /// e' la differenza fra un'applicazione e un problema.
+    /// </summary>
+    private readonly long _maxBlobBytes;
+
+    /// <summary>Tetto predefinito, se la piattaforma non ne impone uno suo.</summary>
+    public const long DefaultMaxBlobBytes = 256L * 1024 * 1024;
+
     private readonly AppConfig _config;
     private readonly LocalVault _vault;
     private readonly List<HistoryItem> _items = new();
@@ -104,9 +144,14 @@ public sealed class ClipboardHistory
 
     public event Action? Changed;
 
-    public ClipboardHistory(AppConfig config, ISecretProtector protector)
+    /// <param name="maxBlobBytes">
+    /// Tetto in byte per gli allegati; 0 o meno usa <see cref="DefaultMaxBlobBytes"/>.
+    /// Android ne passa uno molto piu' basso: li' lo spazio e' dell'utente, non nostro.
+    /// </param>
+    public ClipboardHistory(AppConfig config, ISecretProtector protector, long maxBlobBytes = 0)
     {
         _config = config;
+        _maxBlobBytes = maxBlobBytes > 0 ? maxBlobBytes : DefaultMaxBlobBytes;
         _vault = new LocalVault(Path.Combine(config.StateDir, "history.key"), protector);
         Load();
     }
@@ -152,6 +197,52 @@ public sealed class ClipboardHistory
                     existing.Origin = origin;
                     existing.IsLocal = isLocal;
                     existing.FromExternal = fromExternal;
+                    existing.Preview = payload.ShortPreview();
+
+                    // Ricopiare o ricondividere qualcosa lo rimette in circolo: la
+                    // voce non torna solo in testa all'elenco, torna UTILIZZABILE.
+                    //
+                    // Senza questo, un trasferimento gia' incollato una volta
+                    // restava segnato "usato" per sempre: si ricondivideva lo
+                    // stesso file dal telefono, la voce risaliva in cima — perche'
+                    // l'impronta coincide e questo ramo la ricicla — ma restava
+                    // spenta e non c'era modo di riutilizzarla. L'unica via era
+                    // cancellare la riga e rifare tutto.
+                    existing.Used = false;
+
+                    // Per i file non basta rianimarla, va rifatta puntare al posto
+                    // giusto. L'impronta di un'offerta e' proprietario + elenco di
+                    // percorsi e dimensioni, e NON contiene l'identificativo
+                    // dell'offerta: quindi ricondividere gli stessi file finisce
+                    // qui, ma e' un'offerta NUOVA, con un identificativo nuovo e
+                    // dei byte che stanno da un'altra parte. Riciclando la voce
+                    // senza aggiornarla, la riga tornerebbe attiva puntando a
+                    // un'offerta che il mittente non ha piu' registrato: si
+                    // scaricherebbe a vuoto, che e' peggio di una riga spenta.
+                    if (payload.Kind == PayloadKind.Files && payload.Offer != null)
+                    {
+                        FillFromOffer(existing, payload.Offer, isLocal);
+
+                        // E si dimentica dove si erano scaricati i byte la volta
+                        // scorsa.
+                        //
+                        // L'impronta di un'offerta guarda percorsi e dimensioni,
+                        // non il contenuto — i byte non sono ancora viaggiati,
+                        // e' tutto il senso del prelievo differito. Quindi due
+                        // file diversi con lo stesso nome e la stessa dimensione
+                        // hanno la stessa impronta e finiscono su questa voce.
+                        // Tenendo i percorsi vecchi, chi incolla si vedrebbe
+                        // servire i byte SCARICATI PRIMA senza che nessuno se ne
+                        // accorga: contenuto sbagliato, in silenzio, che e' il
+                        // modo peggiore di sbagliare.
+                        //
+                        // Scaricare di nuovo costa un trasferimento; servire il
+                        // file sbagliato costa la fiducia. Le offerte proprie non
+                        // c'entrano: li' i percorsi li ha appena ricalcolati
+                        // FillFromOffer, e puntano ai file veri dell'utente.
+                        if (!isLocal) existing.LocalRootPaths = null;
+                    }
+
                     // L'hash del testo guarda solo il testo, quindi lo stesso
                     // paragrafo ricopiato in grassetto finisce su questa voce: la
                     // formattazione va aggiornata, non lasciata a quella di prima.
@@ -201,7 +292,7 @@ public sealed class ClipboardHistory
         }
     }
 
-    private static void FillFromOffer(HistoryItem item, FileOffer offer, bool isLocal)
+    private void FillFromOffer(HistoryItem item, FileOffer offer, bool isLocal)
     {
         item.OfferId = offer.OfferId.ToString("N");
         item.OwnerId = offer.OwnerDeviceId;
@@ -221,6 +312,31 @@ public sealed class ClipboardHistory
                 .Where(p => p != null)
                 .Select(p => p!)
                 .ToList();
+        }
+
+        WriteThumbnail(item, offer);
+    }
+
+    /// <summary>
+    /// Mette da parte la miniatura dell'offerta, cifrata come ogni altro blob.
+    ///
+    /// Sta fuori dall'indice per lo stesso motivo della formattazione: l'indice
+    /// si rilegge e si riscrive per intero a ogni copia, e non deve portarsi
+    /// dietro delle immagini.
+    /// </summary>
+    private void WriteThumbnail(HistoryItem item, FileOffer offer)
+    {
+        if (offer.Thumbnail is not { Length: > 0 }) return;
+        try
+        {
+            var name = item.Id + ".thumb";
+            File.WriteAllBytes(Path.Combine(HistoryDir, name), _vault.Seal(offer.Thumbnail));
+            item.BlobFile = name;
+        }
+        catch
+        {
+            // Senza miniatura la voce resta valida: si vedra' il distintivo, come
+            // prima. Non vale la pena far fallire l'inserimento in cronologia.
         }
     }
 
@@ -445,6 +561,103 @@ public sealed class ClipboardHistory
             Deindex(victim);
             DeleteBlob(victim);
         }
+
+        TrimBySizeUnlocked();
+    }
+
+    /// <summary>
+    /// Poi si guarda quanto pesa, non solo quanto e' lungo. Si sacrificano le voci
+    /// con allegati partendo dalle piu' vecchie, e le voci con il pin non si
+    /// toccano: se qualcuno ha messo un pin su un'immagine, quella la vuole.
+    /// </summary>
+    private void TrimBySizeUnlocked()
+    {
+        var total = _items.Sum(BlobBytes);
+        if (total <= _maxBlobBytes) return;
+
+        var freed = 0L;
+        while (total > _maxBlobBytes)
+        {
+            var victim = _items.LastOrDefault(i => !i.Pinned && BlobBytes(i) > 0);
+            if (victim == null) break;
+
+            var size = BlobBytes(victim);
+            _items.Remove(victim);
+            Deindex(victim);
+            DeleteBlob(victim);
+            total -= size;
+            freed += size;
+        }
+
+        if (freed > 0)
+            Log.Write($"[Cronologia] tetto di spazio superato: liberati {freed / 1024} KB");
+    }
+
+    /// <summary>Quanto occupa fuori dall'indice una singola voce.</summary>
+    private long BlobBytes(HistoryItem item)
+    {
+        var total = 0L;
+        foreach (var name in new[] { item.BlobFile, item.RichFile })
+        {
+            if (name == null) continue;
+            try
+            {
+                var info = new FileInfo(Path.Combine(HistoryDir, name));
+                if (info.Exists) total += info.Length;
+            }
+            catch { }
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Butta via gli allegati che l'indice non nomina piu'.
+    ///
+    /// Succede perche' il blob si scrive PRIMA che l'indice venga salvato: se il
+    /// processo muore in mezzo, quel file resta sul disco e non lo nomina piu'
+    /// nessuno — <see cref="DeleteBlob"/> lavora sull'indice, quindi non lo
+    /// troverebbe mai. Su un PC e' raro; su un telefono farsi uccidere a meta'
+    /// lavoro e' il caso normale, non l'incidente.
+    ///
+    /// Si tocca solo cio' che riconosciamo come nostro allegato, mai l'indice,
+    /// mai un file con un'estensione che non abbiamo scritto noi.
+    /// </summary>
+    private void SweepOrphans()
+    {
+        try
+        {
+            var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in _items)
+            {
+                if (item.BlobFile != null) known.Add(item.BlobFile);
+                if (item.RichFile != null) known.Add(item.RichFile);
+            }
+
+            var removed = 0;
+            var freed = 0L;
+            foreach (var path in Directory.EnumerateFiles(HistoryDir))
+            {
+                var name = Path.GetFileName(path);
+                if (!name.EndsWith(".png", StringComparison.OrdinalIgnoreCase) &&
+                    !name.EndsWith(".rich", StringComparison.OrdinalIgnoreCase) &&
+                    !name.EndsWith(".thumb", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (known.Contains(name)) continue;
+
+                try
+                {
+                    var size = new FileInfo(path).Length;
+                    File.Delete(path);
+                    removed++;
+                    freed += size;
+                }
+                catch { }
+            }
+
+            if (removed > 0)
+                Log.Write($"[Cronologia] {removed} allegati orfani rimossi ({freed / 1024} KB)");
+        }
+        catch { }
     }
 
     private void DeleteBlob(HistoryItem item)
@@ -476,6 +689,17 @@ public sealed class ClipboardHistory
     private void Load()
     {
         var fromLegacy = !File.Exists(IndexPath) && File.Exists(LegacyIndexPath);
+
+        // La spazzata degli orfani si fa SOLO se le voci sono state DECODIFICATE.
+        //
+        // Non basta che il file si sia letto, e la differenza e' costata un
+        // controllo rosso: LocalVault.Open ha un ripiego per i blob in chiaro
+        // delle vecchie versioni, quindi su un indice corrotto non risponde null
+        // ma restituisce i byte come sono. Il file risultava "letto", il parse
+        // falliva subito dopo, e si finiva a spazzare con la lista vuota — cioe'
+        // a cancellare tutti gli allegati proprio nel caso in cui non sappiamo
+        // quali servono.
+        var indexRead = false;
         try
         {
             var json = ReadIndexJson();
@@ -483,6 +707,7 @@ public sealed class ClipboardHistory
             var items = JsonSerializer.Deserialize<List<HistoryItem>>(json);
             if (items == null) return;
             _items.AddRange(items);
+            indexRead = true;
 
             // Indice ricostruito dal disco: senza, la deduplica ripartiva da zero a
             // ogni avvio. Le voci salvate da versioni precedenti non hanno l'hash e
@@ -492,6 +717,7 @@ public sealed class ClipboardHistory
                     _hashToId[it.Hash] = it.Id;
         }
         catch { }
+        if (indexRead) SweepOrphans();
         MigratePlainBlobs();
         // Si riscrive subito, cifrato, invece di aspettare la prima copia: finche'
         // l'indice in chiaro resta li' il problema che si voleva chiudere e' aperto,

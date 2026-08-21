@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Il disegno in primo piano dell'icona adattiva: la lavagnetta con la rete a
+     triangolo, cioe' il logo senza il suo fondo (che qui lo fa il livello
+     sottostante).
+
+     Tutto sta dentro un riquadro di 54 centrato nel 108, perche' il sistema
+     ritaglia i bordi e ANIMA i due livelli l'uno contro l'altro: della tela solo
+     i 66 centrali sono garantiti visibili, e il resto e' margine che puo'
+     sparire. Le proporzioni sono quelle misurate su docs/logo.png.
+
+     54 e non 66: il riquadro garantito e' un CERCHIO, e la lavagnetta e' piu'
+     alta che larga. Riempiendo i 66 i suoi angoli cadevano fuori dal cerchio e
+     venivano tagliati — cosa che si e' vista solo guardando l'icona sul telefono,
+     perche' nel disegno c'erano tutti. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        android:width="108dp"
+        android:height="108dp"
+        android:viewportWidth="108"
+        android:viewportHeight="108">
+
+  <!-- la lavagnetta -->
+  <path
+      android:fillColor="#FFF9FAFD"
+      android:pathData="M37.2,28.4 H70.8 A5.8,5.8 0 0 1 76.6,34.2 V75.2 A5.8,5.8 0 0 1 70.8,81 H37.2 A5.8,5.8 0 0 1 31.4,75.2 V34.2 A5.8,5.8 0 0 1 37.2,28.4 Z" />
+
+  <!-- la molletta -->
+  <path
+      android:fillColor="#FF6C54E8"
+      android:pathData="M46.3,27.7 H61.7 A2.5,2.5 0 0 1 64.2,30.2 V30.3 A2.5,2.5 0 0 1 61.7,32.8 H46.3 A2.5,2.5 0 0 1 43.8,30.3 V30.2 A2.5,2.5 0 0 1 46.3,27.7 Z" />
+
+  <!-- i collegamenti fra i tre nodi -->
+  <path
+      android:strokeColor="#FFB19DF9"
+      android:strokeWidth="3.6"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:pathData="M54,45.6 L43.1,67.1 L64.9,67.1 Z" />
+
+  <!-- i tre nodi: in alto questo dispositivo, sotto gli altri due -->
+  <path
+      android:fillColor="#FF7E5CF6"
+      android:pathData="M48.9,45.6 a5.1,5.1 0 1,0 10.2,0 a5.1,5.1 0 1,0 -10.2,0 Z" />
+  <path
+      android:fillColor="#FF34B6DE"
+      android:pathData="M38,67.1 a5.1,5.1 0 1,0 10.2,0 a5.1,5.1 0 1,0 -10.2,0 Z" />
+  <path
+      android:fillColor="#FF34B6DE"
+      android:pathData="M59.8,67.1 a5.1,5.1 0 1,0 10.2,0 a5.1,5.1 0 1,0 -10.2,0 Z" />
+</vector>

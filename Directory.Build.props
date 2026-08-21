@@ -10,7 +10,7 @@
        La pipeline la sovrascrive con -p:Version=<numero dal tag>: qui resta il
        valore usato per le compilazioni locali. -->
   <PropertyGroup>
-    <Version>3.1.0</Version>
+    <Version>3.2.0</Version>
 
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

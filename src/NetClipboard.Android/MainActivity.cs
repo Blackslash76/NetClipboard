@@ -14,7 +14,7 @@ namespace NetClipboard.Droid;
 /// </summary>
 [Activity(
     Label = "@string/app_name",
-    Theme = "@style/NetClipboardTheme",
+    Theme = "@style/NetClipboardTheme.Launch",
     MainLauncher = true,
     LaunchMode = LaunchMode.SingleTop,
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode)]
@@ -24,6 +24,11 @@ public class MainActivity : AvaloniaMainActivity
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
+        // Si nasce con il tema della schermata di avvio (il logo sul fondo della
+        // tavolozza) e si passa subito a quello vero. Il cambio va fatto PRIMA di
+        // base.OnCreate: dopo, la finestra e' gia' costruita col tema di partenza
+        // e il logo resterebbe li' sotto per tutta la vita dell'attivita'.
+        SetTheme(Resource.Style.NetClipboardTheme);
         base.OnCreate(savedInstanceState);
 
         // Da Android 13 la notifica va chiesta, e senza notifica non c'e'

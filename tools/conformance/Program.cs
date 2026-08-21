@@ -172,6 +172,72 @@ static Dictionary<string, string> Compute(Inputs inp)
     r["payload.richRoundtrip"] =
         (back.Text == inp.Text && back.Html == inp.Html && back.Rtf == inp.Rtf).ToString();
 
+    // ----- la miniatura in coda all'offerta -----
+    var withThumb = BuildOffer(inp);
+    withThumb.Thumbnail = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x2A, 0x00, 0x01 }; // non e' un JPEG vero: contano i byte
+    var thumbWire = ClipboardPayload.FromOffer(withThumb).Serialize();
+    r["payload.filesWithThumb"] = Convert.ToHexString(thumbWire);
+
+    var thumbBack = ClipboardPayload.Deserialize(thumbWire);
+    r["payload.thumbRoundtrip"] =
+        (thumbBack.Offer!.Thumbnail != null && thumbBack.Offer.Thumbnail.SequenceEqual(withThumb.Thumbnail)).ToString();
+
+    // Un'offerta scritta come la scriveva una versione PRECEDENTE non ha la coda:
+    // sono esattamente questi byte meno gli ultimi quattro. Deve continuare a
+    // leggersi, altrimenti un telefono aggiornato non parlerebbe piu' con un PC
+    // che non lo e'.
+    var oldStyle = files.Serialize()[..^4];
+    var oldRead = ClipboardPayload.Deserialize(oldStyle);
+    r["compat.readsOfferWithoutThumb"] =
+        (oldRead.Offer!.Entries.Count == offer.Entries.Count && oldRead.Offer.Thumbnail == null).ToString();
+
+    // ----- le date di modifica: seconda coda dell'offerta -----
+    // Valori fissi, mai "adesso": un vettore deve valere anche domani.
+    const long t1 = 1_700_000_000_000, t2 = 1_700_000_123_456, t3 = 1_700_000_999_999;
+
+    var dated = BuildOffer(inp);
+    dated.Entries[0].ModifiedUnixMs = t1;
+    dated.Entries[1].ModifiedUnixMs = t2;
+    dated.Entries[2].ModifiedUnixMs = t3;
+    var datedWire = ClipboardPayload.FromOffer(dated).Serialize();
+    r["payload.filesDated"] = Convert.ToHexString(datedWire);
+
+    var datedBack = ClipboardPayload.Deserialize(datedWire);
+    r["payload.datedRoundtrip"] =
+        (datedBack.Offer!.Entries.Count == dated.Entries.Count &&
+         datedBack.Offer.Entries[1].ModifiedUnixMs == t2).ToString();
+
+    r["hash.filesDated"] = ClipboardPayload.FromOffer(dated).ContentHash();
+    r["hash.datedDiffersFromUndated"] =
+        (ClipboardPayload.FromOffer(dated).ContentHash() != files.ContentHash()).ToString();
+
+    // Il motivo per cui la data e' stata aggiunta: due file con lo stesso nome e
+    // la stessa dimensione, ma modificati in momenti diversi, non sono lo stesso
+    // contenuto. Senza la data avevano la stessa impronta.
+    var edited = BuildOffer(inp);
+    edited.Entries[0].ModifiedUnixMs = t1;
+    edited.Entries[1].ModifiedUnixMs = t2;
+    edited.Entries[2].ModifiedUnixMs = 1_888_888_888_888;   // solo questa cambia
+    r["hash.datedSeparatesEditedFile"] =
+        (ClipboardPayload.FromOffer(edited).ContentHash() !=
+         ClipboardPayload.FromOffer(dated).ContentHash()).ToString();
+
+    // La coda e' in APPENDA: i byte dell'offerta senza date sono un prefisso
+    // esatto di quelli con le date. E' cio' che permette a un lettore di una
+    // versione precedente di fermarsi prima e non accorgersi di niente.
+    var plainWire = files.Serialize();
+    r["compat.datedIsAppendOnly"] =
+        (datedWire.Length > plainWire.Length &&
+         datedWire.AsSpan(0, plainWire.Length).SequenceEqual(plainWire)).ToString();
+
+    // E il verso opposto, dal vivo: un'offerta CON le date, troncata a quanto ne
+    // leggerebbe chi si aspetta solo la miniatura, deve restare valida \u2014 con le
+    // date a zero, cioe' "non note", non con uno zero che finge di essere una data.
+    var truncRead = ClipboardPayload.Deserialize(datedWire[..plainWire.Length]);
+    r["compat.datedReadWithoutDates"] =
+        (truncRead.Offer!.Entries.Count == dated.Entries.Count &&
+         truncRead.Offer.Entries.All(e => e.ModifiedUnixMs == 0)).ToString();
+
     var backFiles = ClipboardPayload.Deserialize(files.Serialize());
     r["payload.filesRoundtrip"] =
         (backFiles.Offer!.OfferId == offer.OfferId &&

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -194,7 +194,15 @@ public sealed class ClipboardPayload
             var sb = new StringBuilder();
             sb.Append(Offer.OwnerDeviceId);
             foreach (var e in Offer.Entries.OrderBy(e => e.RelativePath, StringComparer.Ordinal))
+            {
                 sb.Append('|').Append(e.RelativePath).Append(':').Append(e.Size);
+
+                // La data entra solo se e' nota. Due ragioni: un'offerta senza
+                // date deve continuare a produrre l'impronta di sempre (i vettori
+                // di conformita' lo verificano), e una data mancante non deve
+                // diventare uno zero che finge di essere un'informazione.
+                if (e.ModifiedUnixMs != 0) sb.Append(':').Append(e.ModifiedUnixMs);
+            }
             bytes = Encoding.UTF8.GetBytes(sb.ToString());
         }
         else if (Kind == PayloadKind.Text)

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- La versione a una tinta, per i lanciatori che da Android 13 ricolorano le
+     icone con la tavolozza dello sfondo. Il sistema tiene solo la trasparenza e
+     mette il colore lui: qui la lavagnetta e' un contorno invece che una massa
+     piena, altrimenti la rete dentro sparirebbe nel pieno. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        android:width="108dp"
+        android:height="108dp"
+        android:viewportWidth="108"
+        android:viewportHeight="108"
+        android:tint="#FF000000">
+
+  <path
+      android:strokeColor="#FF000000"
+      android:strokeWidth="3.6"
+      android:pathData="M37.2,28.4 H70.8 A5.8,5.8 0 0 1 76.6,34.2 V75.2 A5.8,5.8 0 0 1 70.8,81 H37.2 A5.8,5.8 0 0 1 31.4,75.2 V34.2 A5.8,5.8 0 0 1 37.2,28.4 Z" />
+  <path
+      android:fillColor="#FF000000"
+      android:pathData="M46.3,25.2 H61.7 A2.5,2.5 0 0 1 64.2,27.7 V30.3 A2.5,2.5 0 0 1 61.7,32.8 H46.3 A2.5,2.5 0 0 1 43.8,30.3 V27.7 A2.5,2.5 0 0 1 46.3,25.2 Z" />
+  <path
+      android:strokeColor="#FF000000"
+      android:strokeWidth="3.6"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
+      android:pathData="M54,45.6 L43.1,67.1 L64.9,67.1 Z" />
+  <path android:fillColor="#FF000000" android:pathData="M48.9,45.6 a5.1,5.1 0 1,0 10.2,0 a5.1,5.1 0 1,0 -10.2,0 Z" />
+  <path android:fillColor="#FF000000" android:pathData="M38,67.1 a5.1,5.1 0 1,0 10.2,0 a5.1,5.1 0 1,0 -10.2,0 Z" />
+  <path android:fillColor="#FF000000" android:pathData="M59.8,67.1 a5.1,5.1 0 1,0 10.2,0 a5.1,5.1 0 1,0 -10.2,0 Z" />
+</vector>

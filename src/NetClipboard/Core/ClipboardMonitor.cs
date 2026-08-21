@@ -1,6 +1,7 @@
-using System.Collections.Specialized;
+﻿using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Drawing.Imaging;
+using System.Security.Cryptography;
 using System.IO;
 using System.Runtime.InteropServices;
 
@@ -97,6 +98,29 @@ public sealed class ClipboardMonitor : Form
         base.WndProc(ref m);
     }
 
+    /// <summary>
+    /// Impronta dell'ultimo contenuto propagato, e quando. Serve a non ripetere
+    /// la stessa copia (vedi <see cref="BurstWindow"/>).
+    /// </summary>
+    private string? _lastSentFingerprint;
+    private DateTime _lastSentAtUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Quanto dura la raffica di eventi che una sola copia puo' produrre.
+    ///
+    /// Un "copia" non e' un evento solo: chi copia scrive la clipboard in piu'
+    /// passaggi (testo, poi HTML, poi altro) e Windows avvisa a ogni passaggio.
+    /// Lo stesso contenuto partiva cosi' due o tre volte per una copia sola. Fra
+    /// PC non si vedeva — chi riceve deduplica in cronologia e riscrivere gli
+    /// stessi appunti non si nota — ma sul telefono diventava una notifica per
+    /// ogni invio, e lo stesso spreco di rete c'era comunque.
+    ///
+    /// Breve di proposito: oltre questa finestra una ricopiatura identica torna a
+    /// propagarsi, perche' puo' essere voluta (un dispositivo tornato in linea
+    /// nel frattempo non aveva ricevuto niente).
+    /// </summary>
+    private static readonly TimeSpan BurstWindow = TimeSpan.FromSeconds(3);
+
     private void OnClipboardUpdate()
     {
         if (DateTime.UtcNow < _suppressUntilUtc)
@@ -108,6 +132,17 @@ public sealed class ClipboardMonitor : Form
 
         if (_suppressHash != null && payload.ContentHash() == _suppressHash)
             return;
+
+        // L'impronta e' sui byte COMPLETI, non su ContentHash(): quello ignora la
+        // formattazione di proposito, e qui ci servirebbe il contrario — ricopiare
+        // lo stesso paragrafo in grassetto e' un contenuto nuovo da propagare.
+        var fingerprint = Convert.ToHexString(SHA256.HashData(payload.Serialize()));
+        var now = DateTime.UtcNow;
+        if (fingerprint == _lastSentFingerprint && now - _lastSentAtUtc < BurstWindow)
+            return;
+
+        _lastSentFingerprint = fingerprint;
+        _lastSentAtUtc = now;
 
         ClipboardChanged?.Invoke(payload);
     }

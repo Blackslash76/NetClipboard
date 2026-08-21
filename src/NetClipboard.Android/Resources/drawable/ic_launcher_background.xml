@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Il fondo dell'icona adattiva: la stessa diagonale viola-azzurra del logo
+     (docs/logo.png), che e' anche il gradiente del segno nell'intestazione del
+     pannello su Windows. Riempie tutto il riquadro da 108: di questo il sistema
+     ritaglia la forma che vuole — cerchio, quadrato stondato, goccia — e un
+     fondo che non arriva ai bordi si vedrebbe tagliato male su qualche telefono.
+
+     Il gradiente pero' NON va da angolo ad angolo: di questi 108 se ne vedono al
+     massimo i 72 centrali, e un gradiente steso su tutta la tela mostrerebbe solo
+     la sua fascia di mezzo — cioe' un azzurro uniforme, con il viola e il ciano
+     tagliati via insieme agli angoli. Steso fra 18 e 90 arriva intero dentro la
+     parte che si vede. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+        xmlns:aapt="http://schemas.android.com/aapt"
+        android:width="108dp"
+        android:height="108dp"
+        android:viewportWidth="108"
+        android:viewportHeight="108">
+  <path android:pathData="M0,0h108v108h-108z">
+    <aapt:attr name="android:fillColor">
+      <gradient
+          android:type="linear"
+          android:startX="18" android:startY="18"
+          android:endX="90" android:endY="90">
+        <item android:offset="0" android:color="#FF7B5CF5" />
+        <item android:offset="1" android:color="#FF35B7DF" />
+      </gradient>
+    </aapt:attr>
+  </path>
+</vector>
